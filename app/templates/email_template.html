@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      body { font-family: sans-serif; }
+      .card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); max-width: 600px; margin: auto; }
+      .poster { float: left; margin-right: 20px; max-width: 150px; }
+      .details { overflow: hidden; }
+      h1 { font-size: 1.25rem; margin: 0 0 10px; }
+      p { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <img class="poster" src="{{ poster_url }}" alt="Poster">
+      <div class="details">
+        <h1>{{ show_title }} S{{ season }}E{{ episode }}: {{ ep_title }}</h1>
+        <p>{{ synopsis }}</p>
+      </div>
+    </div>
+  </body>
+</html>
