@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
   <style>
     body {
-      background: url("{{ url_for('static', filename='bg.jpg') }}") no-repeat center center fixed;
+      background: url("https://raw.githubusercontent.com/jjermany/plex-notifier/36b5738a0e77901b8719c5753236ce3d87debe06/media/settings_background.png") no-repeat center center fixed;
       background-size: cover;
     }
     .container-custom {
@@ -20,7 +20,10 @@
 </head>
 <body>
 <div class="container container-custom py-4">
-  <h1 class="mb-4 text-white">Plex Notifier Settings</h1>
+  <div class="d-flex align-items-center mb-4">
+    <img src="https://github.com/jjermany/plex-notifier/blob/main/media/logo.png?raw=true" alt="Notifier Logo" height="48" class="me-3">
+    <h1 class="mb-0 text-white">Plex Notifier Settings</h1>
+  </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
