@@ -13,48 +13,57 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from flask import current_app
 from .config import Settings
 
-def start_scheduler(app):
+def start_scheduler(app, interval):
     """
-    Start a background scheduler that polls Plex for new episodes every 30 minutes.
+    Start a BackgroundScheduler that runs check_new_episodes every `interval` minutes.
+    Returns the scheduler instance for later rescheduling.
     """
     sched = BackgroundScheduler()
     sched.add_job(
         func=lambda: check_new_episodes(app),
         trigger='interval',
-        minutes=30
+        minutes=interval,
+        id='check_job',
+        replace_existing=True
     )
     sched.start()
-    app.logger.info("Scheduler started, will check for new episodes every 30 minutes.")
+    app.logger.info(f"Scheduler started, interval={interval}min")
+    return sched
 
 def check_new_episodes(app):
     """
-    Poll Plex for recently added TV episodes in the last 30 minutes,
+    Poll Plex for recently added TV episodes in the last `interval` minutes,
     then notify relevant users via email.
     """
     with app.app_context():
         current_app.logger.info("🕒 Running check_new_episodes job")
         s = Settings.query.first()
         if not s:
-            current_app.logger.info("Notifications disabled or settings not configured.")
+            current_app.logger.warning("Settings not configured; skipping new-episode check.")
             return
+
+        # use the same interval to define the cutoff window
+        cutoff = datetime.utcnow() - timedelta(minutes=s.notify_interval or 30)
 
         # Connect to Plex
         try:
             plex = PlexServer(s.plex_url, s.plex_token)
-            raw = plex.library.section('TV Shows').recentlyAdded(maxresults=50)
+            raw_items = plex.library.section('TV Shows').recentlyAdded(maxresults=50)
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
             return
 
-        # Filter for episodes added in the last 30 minutes
-        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        # Filter for truly new episodes
         episodes = [
-            item for item in raw
+            item for item in raw_items
             if isinstance(item, Episode)
             and datetime.utcfromtimestamp(item.addedAt) >= cutoff
         ]
+        if not episodes:
+            current_app.logger.info("No new episodes found in this interval.")
+            return
 
-        # Prepare the email template
+        # Load email template
         tmpl_dir = os.path.join(app.root_path, 'templates')
         env = Environment(
             loader=FileSystemLoader(tmpl_dir),
@@ -62,28 +71,28 @@ def check_new_episodes(app):
         )
         template = env.get_template('email_template.html')
 
-        # Fetch your user list from Tautulli (or fallback)
+        # Get users from Tautulli (or fallback)
         users = _get_users(s)
 
         for ep in episodes:
             try:
                 season = ep.parent()
-                show   = season.parent()
+                show = season.parent()
             except Exception as e:
                 current_app.logger.error(f"Failed to derive show for {ep}: {e}")
                 continue
 
             for user in users:
-                uid          = user.get("user_id")
-                notify_email = user.get("email") or s.from_address
+                uid = user.get("user_id")
+                email = user.get("email") or s.from_address
 
-                # Check per-user watch history if a Tautulli user
+                # skip if user has history for this show or this episode
                 if uid and not _user_has_history(s, uid, show.ratingKey):
                     continue
                 if uid and _user_has_history(s, uid, ep.ratingKey):
                     continue
 
-                # Render and send the email
+                # build and send email
                 poster_url = f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}"
                 html = template.render(
                     show_title=show.title,
@@ -94,16 +103,16 @@ def check_new_episodes(app):
                     poster_url=poster_url
                 )
                 subject = f"{show.title} S{ep.parentIndex:02}E{ep.index:02} Now Available!"
-                _send_email(s, notify_email, subject, html)
+                _send_email(s, email, subject, html)
                 current_app.logger.info(
-                    f"Sent notification to {notify_email} for "
-                    f"{show.title} S{ep.parentIndex}E{ep.index}."
+                    f"Sent notification to {email} for {show.title} "
+                    f"S{ep.parentIndex}E{ep.index}"
                 )
 
 def _get_users(s: Settings) -> list[dict]:
     """
-    Retrieve the list of users from Tautulli (user_id, username, email).
-    Fallback to a single admin user if the call fails or isn't configured.
+    Retrieve users from Tautulli (user_id, username, email).
+    Fall back to a single admin user if unavailable.
     """
     if s.tautulli_url and s.tautulli_api_key:
         try:
@@ -119,31 +128,28 @@ def _get_users(s: Settings) -> list[dict]:
                 {
                     "user_id": u.get("user_id"),
                     "username": u.get("username"),
-                    "email":    u.get("email") or s.from_address
-                }
-                for u in data
+                    "email": u.get("email") or s.from_address
+                } for u in data
             ]
         except Exception as e:
             current_app.logger.error(f"Error fetching users from Tautulli: {e}")
 
-    # Fallback to admin-only
     return [{"user_id": None, "username": "Admin", "email": s.from_address}]
 
 def _user_has_history(s: Settings, user_id: int, rating_key: str) -> bool:
     """
-    Check via Tautulli whether the given user has any history
-    (started or watched) for the given rating_key.
+    Check via Tautulli if a user has any history for a given rating_key.
     """
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
         resp = requests.get(
             base,
             params={
-                "apikey":     s.tautulli_api_key,
-                "cmd":        "get_history",
-                "user_id":    user_id,
+                "apikey": s.tautulli_api_key,
+                "cmd": "get_history",
+                "user_id": user_id,
                 "rating_key": rating_key,
-                "length":     1
+                "length": 1
             },
             timeout=10
         )
@@ -156,18 +162,19 @@ def _user_has_history(s: Settings, user_id: int, rating_key: str) -> bool:
 
 def _send_email(s: Settings, to: str, subject: str, html: str):
     """
-    Send a single HTML email via SMTP using the settings provided.
+    Send an HTML email via SMTP.
     """
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
-    msg['From']    = s.from_address
-    msg['To']      = to
+    msg['From'] = s.from_address
+    msg['To'] = to
     msg.attach(MIMEText(html, 'html'))
 
     try:
-        with smtplib.SMTP(s.smtp_host, s.smtp_port) as smtp:
-            smtp.starttls()
-            smtp.login(s.smtp_user, s.smtp_pass)
-            smtp.send_message(msg)
+        smtp = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=30)
+        smtp.starttls()
+        smtp.login(s.smtp_user, s.smtp_pass)
+        smtp.send_message(msg)
+        smtp.quit()
     except Exception as e:
         current_app.logger.error(f"Error sending email to {to}: {e}")
