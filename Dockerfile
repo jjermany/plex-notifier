@@ -19,5 +19,5 @@ ENV FLASK_APP=app/webapp.py:create_app
 ENV FLASK_ENV=production
 
 # Run the app with a production WSGI server (Gunicorn)
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "app.webapp:create_app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--factory", "app.webapp:create_app"]
 
