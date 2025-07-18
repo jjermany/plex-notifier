@@ -2,6 +2,8 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, IntegerField, BooleanField, SubmitField
 from wtforms.validators import DataRequired, URL, Optional, Email
 from wtforms import EmailField
+from wtforms import IntegerField
+from wtforms.validators import NumberRange
 
 class TestEmailForm(FlaskForm):
     test_email = EmailField(
@@ -23,3 +25,9 @@ class SettingsForm(FlaskForm):
     from_address       = StringField('From Email', validators=[Optional(), Email()])
     notify_new_episodes= BooleanField('Notify on new episodes')
     submit             = SubmitField('Save Settings')
+    notify_interval    = IntegerField(
+        'Poll interval (minutes)',
+        validators=[NumberRange(min=1, max=1440)],
+        default=30,
+        description='How often to check for new episodes.'
+    )

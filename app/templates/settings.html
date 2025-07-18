@@ -1,70 +1,127 @@
-{% extends 'base.html' %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Plex Notifier Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body>
+<div class="container py-4">
+  <h1 class="mb-4">Plex Notifier Settings</h1>
 
-{% block content %}
-  <h1>Notification Service Settings</h1>
-  <form method="post">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form method="post" novalidate>
     {{ form.hidden_tag() }}
-    
-    <div class="form-group">
-      {{ form.plex_url.label }}  
-      {{ form.plex_url(class="form-control") }}
+
+    <div class="mb-3">
+      {{ form.plex_url.label(class="form-label") }}
+      {{ form.plex_url(class="form-control", placeholder="http://192.168.0.168:32400") }}
+      {% if form.plex_url.errors %}
+        <div class="text-danger small">{{ form.plex_url.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.plex_token.label }}
+    <div class="mb-3">
+      {{ form.plex_token.label(class="form-label") }}
       {{ form.plex_token(class="form-control") }}
+      {% if form.plex_token.errors %}
+        <div class="text-danger small">{{ form.plex_token.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.tautulli_url.label }}
-      {{ form.tautulli_url(class="form-control") }}
+    <div class="mb-3">
+      {{ form.tautulli_url.label(class="form-label") }}
+      {{ form.tautulli_url(class="form-control", placeholder="http://192.168.0.168:8181") }}
+      {% if form.tautulli_url.errors %}
+        <div class="text-danger small">{{ form.tautulli_url.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.tautulli_api_key.label }}
+    <div class="mb-3">
+      {{ form.tautulli_api_key.label(class="form-label") }}
       {{ form.tautulli_api_key(class="form-control") }}
+      {% if form.tautulli_api_key.errors %}
+        <div class="text-danger small">{{ form.tautulli_api_key.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.smtp_host.label }}
-      {{ form.smtp_host(class="form-control") }}
+    <hr>
+    <h4>Email Settings</h4>
+
+    <div class="mb-3">
+      {{ form.smtp_host.label(class="form-label") }}
+      {{ form.smtp_host(class="form-control", placeholder="smtp.example.com") }}
+      {% if form.smtp_host.errors %}
+        <div class="text-danger small">{{ form.smtp_host.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.smtp_port.label }}
+    <div class="mb-3">
+      {{ form.smtp_port.label(class="form-label") }}
       {{ form.smtp_port(class="form-control") }}
+      {% if form.smtp_port.errors %}
+        <div class="text-danger small">{{ form.smtp_port.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.smtp_user.label }}
+    <div class="mb-3">
+      {{ form.smtp_user.label(class="form-label") }}
       {{ form.smtp_user(class="form-control") }}
+      {% if form.smtp_user.errors %}
+        <div class="text-danger small">{{ form.smtp_user.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.smtp_pass.label }}
-      {{ form.smtp_pass(class="form-control") }}
+    <div class="mb-3">
+      {{ form.smtp_pass.label(class="form-label") }}
+      {{ form.smtp_pass(class="form-control", type="password") }}
+      {% if form.smtp_pass.errors %}
+        <div class="text-danger small">{{ form.smtp_pass.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.from_address.label }}
+    <div class="mb-3">
+      {{ form.from_address.label(class="form-label") }}
       {{ form.from_address(class="form-control") }}
+      {% if form.from_address.errors %}
+        <div class="text-danger small">{{ form.from_address.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <div class="form-group">
-      {{ form.notify_new_episodes() }}
-      {{ form.notify_new_episodes.label }}
+    <div class="mb-3">
+      {{ form.notify_interval.label(class="form-label") }}
+      {{ form.notify_interval(class="form-control", placeholder="30") }}
+      <div class="form-text">Minutes between polling for new episodes (default 30)</div>
+      {% if form.notify_interval.errors %}
+        <div class="text-danger small">{{ form.notify_interval.errors[0] }}</div>
+      {% endif %}
     </div>
 
-    <button type="submit" class="btn">Save Settings</button>
+    <button type="submit" class="btn btn-primary">Save Settings</button>
   </form>
-  <hr>
-<h2>Test Email</h2>
-<form method="post" action="{{ url_for('send_test_email') }}">
-  {{ test_form.hidden_tag() }}
-  <div class="form-group">
-    {{ test_form.test_email.label }}
-    {{ test_form.test_email(class="form-control") }}
-  </div>
-  <button type="submit" class="btn">{{ test_form.test_submit.label.text }}</button>
-</form>
-{% endblock %}
+
+  <hr class="my-4">
+  <h4>Test Email</h4>
+
+  <form method="post" action="{{ url_for('send_test_email') }}">
+    {{ test_form.hidden_tag() }}
+    <div class="mb-3">
+      {{ test_form.test_email.label(class="form-label") }}
+      {{ test_form.test_email(class="form-control", placeholder="you@example.com") }}
+      {% if test_form.test_email.errors %}
+        <div class="text-danger small">{{ test_form.test_email.errors[0] }}</div>
+      {% endif %}
+    </div>
+    <button type="submit" class="btn btn-secondary">Send Test Email</button>
+  </form>
+</div>
+</body>
+</html>

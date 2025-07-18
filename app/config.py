@@ -14,3 +14,4 @@ class Settings(db.Model):
     smtp_pass         = db.Column(db.String)
     from_address      = db.Column(db.String)
     notify_new_episodes = db.Column(db.Boolean, default=True)
+    notify_interval = db.Column(db.Integer, nullable=False, default=30)
