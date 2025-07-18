@@ -57,4 +57,14 @@
 
     <button type="submit" class="btn">Save Settings</button>
   </form>
+  <hr>
+<h2>Test Email</h2>
+<form method="post" action="{{ url_for('send_test_email') }}">
+  {{ test_form.hidden_tag() }}
+  <div class="form-group">
+    {{ test_form.test_email.label }}
+    {{ test_form.test_email(class="form-control") }}
+  </div>
+  <button type="submit" class="btn">{{ test_form.test_submit.label.text }}</button>
+</form>
 {% endblock %}

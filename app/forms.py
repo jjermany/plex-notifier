@@ -1,6 +1,15 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, IntegerField, BooleanField, SubmitField
 from wtforms.validators import DataRequired, URL, Optional, Email
+from wtforms import EmailField
+
+class TestEmailForm(FlaskForm):
+    test_email = EmailField(
+        'Send a test email to',
+        validators=[DataRequired(), Email()]
+    )
+    test_submit = SubmitField('Send Test Email')
+
 
 class SettingsForm(FlaskForm):
     plex_url           = StringField('Plex URL', validators=[DataRequired(), URL()])

@@ -7,3 +7,4 @@ requests
 Jinja2
 python-dotenv
 email_validator
+gunicorn
