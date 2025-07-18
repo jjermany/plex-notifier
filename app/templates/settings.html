@@ -5,6 +5,8 @@
   <title>Plex Notifier Settings</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
   <style>
     body {
       background: url("https://raw.githubusercontent.com/jjermany/plex-notifier/36b5738a0e77901b8719c5753236ce3d87debe06/media/settings_background.png") no-repeat center center fixed;
@@ -50,7 +52,12 @@
         </div>
         <div class="mb-3">
           {{ form.plex_token.label(class="form-label text-white") }}
-          {{ form.plex_token(class="form-control") }}
+          <div class="input-group">
+              {{ form.plex_token(class="form-control", type="password", id="plex_token") }}
+              <button class="btn btn-outline-secondary" type="button" id="togglePlexToken">
+                <i class="bi bi-eye" id="iconPlexToken"></i>
+              </button>
+            </div>
           {% if form.plex_token.errors %}
             <div class="text-danger small">{{ form.plex_token.errors[0] }}</div>
           {% endif %}
@@ -64,7 +71,12 @@
         </div>
         <div class="mb-3">
           {{ form.tautulli_api_key.label(class="form-label text-white") }}
-          {{ form.tautulli_api_key(class="form-control") }}
+          <div class="input-group">
+              {{ form.tautulli_api_key(class="form-control", type="password", id="tautulli_api_key") }}
+              <button class="btn btn-outline-secondary" type="button" id="toggleTautulliKey">
+                <i class="bi bi-eye" id="iconTautulliKey"></i>
+              </button>
+            </div>
           {% if form.tautulli_api_key.errors %}
             <div class="text-danger small">{{ form.tautulli_api_key.errors[0] }}</div>
           {% endif %}
@@ -159,6 +171,28 @@
 </div>
 
 <!-- Optional JS for Bootstrap components (e.g., tooltips) -->
+<script>
+  // Toggle visibility for Plex Token
+  document.getElementById('togglePlexToken').addEventListener('click', function() {
+    const input = document.getElementById('plex_token');
+    const icon = document.getElementById('iconPlexToken');
+    if (input.type === 'password') {
+      input.type = 'text'; icon.classList.replace('bi-eye','bi-eye-slash');
+    } else {
+      input.type = 'password'; icon.classList.replace('bi-eye-slash','bi-eye');
+    }
+  });
+  // Toggle visibility for Tautulli API Key
+  document.getElementById('toggleTautulliKey').addEventListener('click', function() {
+    const input = document.getElementById('tautulli_api_key');
+    const icon = document.getElementById('iconTautulliKey');
+    if (input.type === 'password') {
+      input.type = 'text'; icon.classList.replace('bi-eye','bi-eye-slash');
+    } else {
+      input.type = 'password'; icon.classList.replace('bi-eye-slash','bi-eye');
+    }
+  });
+</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
