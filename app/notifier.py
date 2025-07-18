@@ -34,7 +34,7 @@ def check_new_episodes(app):
     with app.app_context():
         current_app.logger.info("🕒 Running check_new_episodes job")
         s = Settings.query.first()
-        if not s or not s.notify_new_episodes:
+        if not s:
             current_app.logger.info("Notifications disabled or settings not configured.")
             return
 
