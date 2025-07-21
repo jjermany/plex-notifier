@@ -24,21 +24,18 @@ def create_app():
     )
 
     db.init_app(app)
+    with app.app_context():
+        db.create_all()
+        s = Settings.query.first()
+        if not s:
+            s = Settings(notify_interval=30)
+            db.session.add(s)
+            db.session.commit()
 
-    @app.before_first_request
-    def initialize():
-        with app.app_context():
-            db.create_all()
-            s = Settings.query.first()
-            if not s:
-                s = Settings(notify_interval=30)
-                db.session.add(s)
-                db.session.commit()
-
-            interval = s.notify_interval or 30
-            sched = start_scheduler(app, interval)
-            app.config['scheduler'] = sched
-            app.logger.info("✅ App fully initialized before first request.")
+        interval = s.notify_interval or 30
+        sched = start_scheduler(app, interval)
+        app.config['scheduler'] = sched
+        app.logger.info("✅ App initialized successfully.")
 
     @app.route('/', methods=['GET', 'POST'])
     def settings():
