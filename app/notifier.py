@@ -1,4 +1,4 @@
-# notifier.py (updated for logic: notify if user watched any episode from a show)
+# notifier.py (fixed version)
 
 import os
 import smtplib
@@ -11,11 +11,10 @@ from plexapi.server import PlexServer
 from plexapi.video import Episode
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from flask import current_app, Flask
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any
 from .config import Settings
 import logging
 
-# Reduce noisy HTTP debug logs
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
 def start_scheduler(app, interval) -> BackgroundScheduler:
@@ -76,9 +75,11 @@ def check_new_episodes(app) -> None:
                 if not show_key:
                     continue
 
-                if not _user_has_history(s, uid, show_key):
+                # Check if user has watched any episode from this show
+                if not _user_has_watched_show(s, uid, show_key):
                     continue
 
+                # Skip if user already watched this episode
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue
 
@@ -155,11 +156,11 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
         resp = requests.get(
             base,
             params={
-                'apikey':     s.tautulli_api_key,
-                'cmd':        'get_history',
-                'user_id':    user_id,
+                'apikey': s.tautulli_api_key,
+                'cmd': 'get_history',
+                'user_id': user_id,
                 'rating_key': rating_key,
-                'length':     1
+                'length': 1
             },
             timeout=10
         )
@@ -168,6 +169,27 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
         return len(history) > 0
     except Exception as e:
         current_app.logger.error(f"Error querying Tautulli history for user {user_id}: {e}")
+        return False
+
+def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: Any) -> bool:
+    try:
+        base = f"{s.tautulli_url.rstrip('/')}/api/v2"
+        resp = requests.get(
+            base,
+            params={
+                'apikey': s.tautulli_api_key,
+                'cmd': 'get_history',
+                'user_id': user_id,
+                'grandparent_rating_key': grandparent_rating_key,
+                'length': 1
+            },
+            timeout=10
+        )
+        resp.raise_for_status()
+        history = resp.json().get('response', {}).get('data', [])
+        return len(history) > 0
+    except Exception as e:
+        current_app.logger.error(f"Error checking show history for user {user_id}: {e}")
         return False
 
 def _send_email(s: Settings, msg: MIMEMultipart) -> None:

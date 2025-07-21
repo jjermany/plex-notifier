@@ -1,3 +1,5 @@
+# webapp.py
+
 import os
 import logging
 from flask import Flask, render_template, redirect, url_for, flash
@@ -10,7 +12,6 @@ def create_app():
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
 
-    # Create DB file if missing
     os.makedirs(app.instance_path, exist_ok=True)
     db_path = os.path.join(app.instance_path, 'config.sqlite3')
     if not os.path.exists(db_path):
@@ -23,10 +24,22 @@ def create_app():
     )
 
     db.init_app(app)
-    with app.app_context():
-        db.create_all()
 
-    # Settings page
+    @app.before_first_request
+    def initialize():
+        with app.app_context():
+            db.create_all()
+            s = Settings.query.first()
+            if not s:
+                s = Settings(notify_interval=30)
+                db.session.add(s)
+                db.session.commit()
+
+            interval = s.notify_interval or 30
+            sched = start_scheduler(app, interval)
+            app.config['scheduler'] = sched
+            app.logger.info("✅ App fully initialized before first request.")
+
     @app.route('/', methods=['GET', 'POST'])
     def settings():
         s = Settings.query.first() or Settings(notify_interval=30)
@@ -54,7 +67,6 @@ def create_app():
 
         return render_template('settings.html', form=form, test_form=test_form)
 
-    # Test email
     @app.route('/test-email', methods=['POST'])
     def send_test_email():
         s = Settings.query.first()
@@ -77,7 +89,6 @@ def create_app():
 
         return redirect(url_for('settings'))
 
-    # Manual run-check endpoint
     @app.route('/run-check', methods=['POST'])
     def run_check():
         s = Settings.query.first()
@@ -98,14 +109,5 @@ def create_app():
 
         return redirect(url_for('settings'))
 
-    # Start scheduler
-    with app.app_context():
-        s = Settings.query.first()
-        interval = s.notify_interval if s and s.notify_interval else 30
-        sched = start_scheduler(app, interval)
-        app.config['scheduler'] = sched
-
-    # Register optional debug route: /force-run
     register_debug_route(app)
-
     return app
