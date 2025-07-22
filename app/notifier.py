@@ -2,7 +2,8 @@
 import os
 import smtplib
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,8 +13,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from flask import current_app, Flask
 from typing import List, Dict, Any
 from .config import Settings
-from datetime import timezone
-from email.mime.image import MIMEImage
 import logging
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -51,16 +50,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             for ep in all_eps:
                 if not isinstance(ep, Episode) or not ep.addedAt:
                     continue
-
-                added_at_utc = ep.addedAt.astimezone(timezone.utc)
-
-            if added_at_utc >= cutoff_dt:
-                recent_eps.append(ep)
-                current_app.logger.debug(
-                    f"🧪 Accepted: {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} - addedAt={added_at_utc}"
-                )
-
-                if added_at_utc >= cutoff_dt:
+                if ep.addedAt.astimezone(timezone.utc) >= cutoff_dt:
                     recent_eps.append(ep)
 
             current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {cutoff_dt}")
@@ -72,7 +62,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No recent episodes found.")
             return
 
-        users = [u for u in _get_users(s) if u.get('email') != s.from_address]
+        users = _get_users(s)
         if not users:
             current_app.logger.info("⚠️ No users fetched.")
             return
@@ -82,7 +72,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         for user in users:
             uid = user.get('user_id')
             user_email = user.get('email')
-            email = user_email or s.from_address
+
+            # Exclude the from_address user
+            if not user_email or user_email == s.from_address:
+                continue
+
             watchable: List[Episode] = []
 
             current_app.logger.debug(f"🔍 Checking user {user_email} (user_id={uid})")
@@ -93,35 +87,26 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     continue
 
                 if not _user_has_watched_show(s, uid, show_key):
-                    current_app.logger.debug(
-                        f"⛔ Skipping {ep.grandparentTitle} for {user_email} — user has never watched this show"
-                    )
+                    current_app.logger.debug(f"⛔ Skipping {ep.grandparentTitle} for {user_email} — never watched")
                     continue
 
                 if _user_has_history(s, uid, ep.ratingKey):
-                    current_app.logger.debug(
-                        f"⏩ Skipping {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} for {user_email} — already watched"
-                    )
+                    current_app.logger.debug(f"⏩ Skipping {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} — already watched")
                     continue
 
-                current_app.logger.debug(
-                    f"✅ Will notify {user_email} about {ep.grandparentTitle} S{ep.parentIndex}E{ep.index}"
-                )
+                current_app.logger.debug(f"✅ Will notify {user_email} about {ep.grandparentTitle} S{ep.parentIndex}E{ep.index}")
                 watchable.append(ep)
 
             if watchable:
-                user_eps[email] = watchable
-                current_app.logger.info(f"User {user_email} will receive {len(watchable)} new episodes")
+                user_eps[user_email] = watchable
+                current_app.logger.info(f"User {user_email} will receive {len(watchable)} episodes")
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
             return
 
         tmpl_dir = os.path.join(app.root_path, 'templates')
-        env = Environment(
-            loader=FileSystemLoader(tmpl_dir),
-            autoescape=select_autoescape(['html'])
-        )
+        env = Environment(loader=FileSystemLoader(tmpl_dir), autoescape=select_autoescape(['html']))
         template = env.get_template('jinja2.html')
 
         for email, eps in user_eps.items():
@@ -131,13 +116,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             msg['To'] = email
 
             episodes_ctx = [{
-                'cid': f"poster{idx}",
-                'show_title': ep.grandparentTitle,
-                'season': ep.parentIndex,
-                'episode': ep.index,
-                'ep_title': ep.title,
-                'synopsis': ep.summary or 'No synopsis available.'
-            } for idx, ep in enumerate(eps, start=1)]
+        'show_title': ep.grandparentTitle,
+        'season': ep.parentIndex,
+        'episode': ep.index,
+        'ep_title': ep.title,
+        'synopsis': ep.summary or 'No synopsis available.',
+        'poster_url': (
+        f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else
+        f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else
+        fallback_url
+    )
+} for ep in eps]
+
 
             html_body = template.render(episodes=episodes_ctx)
             plain_body = "\n".join([
@@ -147,22 +137,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
             msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-
-            # Embed poster images as inline attachments
-            for idx, ep in enumerate(eps, start=1):
-                try:
-                    image_url = ep.thumb if hasattr(ep, 'thumb') else None
-                    if image_url:
-                        img_resp = requests.get(image_url, stream=True, timeout=10)
-                        img_resp.raise_for_status()
-                        img_data = img_resp.content
-
-                        image_part = MIMEImage(img_data)
-                        image_part.add_header('Content-ID', f'<poster{idx}>')
-                        image_part.add_header('Content-Disposition', 'inline', filename=f'poster{idx}.jpg')
-                        msg.attach(image_part)
-                except Exception as e:
-                    current_app.logger.warning(f"Could not attach poster for {ep.title}: {e}")
 
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
@@ -188,7 +162,7 @@ def _get_users(s: Settings) -> List[Dict[str, Any]]:
             ]
         except Exception as e:
             current_app.logger.error(f"Error fetching users from Tautulli: {e}")
-    return [{'user_id': None, 'username': 'Admin', 'email': s.from_address}]
+    return []
 
 def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
     try:
@@ -205,8 +179,7 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
             timeout=10
         )
         resp.raise_for_status()
-        top_data = resp.json().get('response', {}).get('data', {})
-        history = top_data.get('data', [])
+        history = resp.json().get('response', {}).get('data', {}).get('data', [])
         return len(history) > 0
     except Exception as e:
         current_app.logger.error(f"Error querying Tautulli history for user {user_id}: {e}")
@@ -227,8 +200,7 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
             timeout=10
         )
         resp.raise_for_status()
-        top_data = resp.json().get('response', {}).get('data', {})
-        history = top_data.get('data', [])
+        history = resp.json().get('response', {}).get('data', {}).get('data', [])
         return len(history) > 0
     except Exception as e:
         current_app.logger.error(f"Error checking show history for user {user_id}: {e}")
