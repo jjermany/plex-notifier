@@ -15,7 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from plexapi.server import PlexServer
 from plexapi.video import Episode
-
+from apscheduler.schedulers.base import BaseScheduler
 from .config import Settings
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -170,8 +170,15 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
-
-            # Removed duplicate block that referenced undefined 'episodes_ctx'
+                
+        current_app.logger.info("✅ check_new_episodes job completed.")
+        scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
+        if scheduler:
+            job = scheduler.get_job('check_job')
+            if job and job.next_run_time:
+                current_app.logger.info(f"⏭️ Next scheduled run at {job.next_run_time.isoformat()}")
+            else:
+                current_app.logger.warning("⚠️ Could not retrieve next_run_time from scheduler.")
 
 def _get_users(s: Settings) -> List[Dict[str, Any]]:
     if s.tautulli_url and s.tautulli_api_key:
