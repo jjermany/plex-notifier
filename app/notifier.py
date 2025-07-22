@@ -31,6 +31,12 @@ def start_scheduler(app, interval) -> BackgroundScheduler:
     )
     sched.start()
     app.logger.info(f"Scheduler started, interval={interval}min")
+
+    # 🔧 Register scheduler in app.extensions for access in check_new_episodes
+    if not hasattr(app, 'extensions'):
+        app.extensions = {}
+    app.extensions['apscheduler'] = sched
+
     return sched
 
 def check_new_episodes(app, override_interval_minutes: int = None) -> None:
