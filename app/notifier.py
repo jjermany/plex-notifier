@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 from typing import List, Dict, Any
 
 from flask import current_app, Flask
@@ -109,18 +110,35 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             msg['From'] = s.from_address
             msg['To'] = email
 
-            episodes_ctx = [{
-                'show_title': ep.grandparentTitle,
-                'season': ep.parentIndex,
-                'episode': ep.index,
-                'ep_title': ep.title,
-                'synopsis': ep.summary or 'No synopsis available.',
-                'poster_url': (
+            episodes_ctx = []
+            for idx, ep in enumerate(eps, start=1):
+                poster_url = (
                     f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else
                     f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else
                     fallback_url
                 )
-            } for ep in eps]
+
+                try:
+                    poster_data = requests.get(poster_url, timeout=10)
+                    poster_data.raise_for_status()
+                    img = MIMEImage(poster_data.content)
+                    cid = f"poster{idx}"
+                    img.add_header("Content-ID", f"<{cid}>")
+                    img.add_header("Content-Disposition", "inline", filename=f"{cid}.jpg")
+                    msg.attach(img)
+                    poster_ref = f"cid:{cid}"
+                except Exception as e:
+                    current_app.logger.warning(f"Poster fetch failed for {poster_url}: {e}")
+                    poster_ref = fallback_url
+
+                episodes_ctx.append({
+                    'show_title': ep.grandparentTitle,
+                    'season': ep.parentIndex,
+                    'episode': ep.index,
+                    'ep_title': ep.title,
+                    'synopsis': ep.summary or 'No synopsis available.',
+                    'poster_ref': poster_ref
+                })
 
             html_body = template.render(episodes=episodes_ctx)
             plain_body = "\n".join([

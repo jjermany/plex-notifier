@@ -2,6 +2,7 @@
 
 import os
 import logging
+import threading
 from flask import Flask, render_template, redirect, url_for, flash
 from .config import db, Settings
 from .forms import SettingsForm, TestEmailForm
@@ -95,12 +96,14 @@ def create_app():
             flash('Please save settings first.', 'warning')
             return redirect(url_for('settings'))
 
-        try:
-            check_new_episodes(app, override_interval_minutes=1440)
-            flash('Manual check for the last 24h completed. See logs.', 'info')
-        except Exception as e:
-            flash(f'Error during manual check: {e}', 'danger')
+        def run_async():
+            try:
+                check_new_episodes(app, override_interval_minutes=1440)
+            except Exception as e:
+                app.logger.error(f"Manual check failed: {e}")
 
+        threading.Thread(target=run_async).start()
+        flash('✅ Manual check started! You will be notified if there are new episodes.', 'info')
         return redirect(url_for('settings'))
 
     register_debug_route(app)
