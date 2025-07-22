@@ -2,18 +2,20 @@
 import os
 import smtplib
 import requests
+import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import List, Dict, Any
+
+from flask import current_app, Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from plexapi.server import PlexServer
 from plexapi.video import Episode
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from flask import current_app, Flask
-from typing import List, Dict, Any
+
 from .config import Settings
-import logging
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
@@ -46,13 +48,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             tv = plex.library.section('TV Shows')
             all_eps = tv.search(libtype='episode')
 
-            recent_eps = []
-            for ep in all_eps:
-                if not isinstance(ep, Episode) or not ep.addedAt:
-                    continue
-                if ep.addedAt.astimezone(timezone.utc) >= cutoff_dt:
-                    recent_eps.append(ep)
-
+            recent_eps = [
+                ep for ep in all_eps
+                if isinstance(ep, Episode) and ep.addedAt and ep.addedAt.astimezone(timezone.utc) >= cutoff_dt
+            ]
             current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {cutoff_dt}")
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
@@ -73,7 +72,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             uid = user.get('user_id')
             user_email = user.get('email')
 
-            # Exclude the from_address user
             if not user_email or user_email == s.from_address:
                 continue
 
@@ -85,16 +83,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 show_key = ep.grandparentRatingKey
                 if not show_key:
                     continue
-
                 if not _user_has_watched_show(s, uid, show_key):
-                    current_app.logger.debug(f"⛔ Skipping {ep.grandparentTitle} for {user_email} — never watched")
                     continue
-
                 if _user_has_history(s, uid, ep.ratingKey):
-                    current_app.logger.debug(f"⏩ Skipping {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} — already watched")
                     continue
-
-                current_app.logger.debug(f"✅ Will notify {user_email} about {ep.grandparentTitle} S{ep.parentIndex}E{ep.index}")
                 watchable.append(ep)
 
             if watchable:
@@ -109,6 +101,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         env = Environment(loader=FileSystemLoader(tmpl_dir), autoescape=select_autoescape(['html']))
         template = env.get_template('jinja2.html')
 
+        fallback_url = "https://raw.githubusercontent.com/jjermany/plex-notifier/main/media/no-poster-dark.jpg"
+
         for email, eps in user_eps.items():
             msg = MIMEMultipart('alternative')
             msg['Subject'] = f"{len(eps)} New Episode{'s' if len(eps) != 1 else ''} Available"
@@ -116,18 +110,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             msg['To'] = email
 
             episodes_ctx = [{
-        'show_title': ep.grandparentTitle,
-        'season': ep.parentIndex,
-        'episode': ep.index,
-        'ep_title': ep.title,
-        'synopsis': ep.summary or 'No synopsis available.',
-        'poster_url': (
-        f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else
-        f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else
-        fallback_url
-    )
-} for ep in eps]
-
+                'show_title': ep.grandparentTitle,
+                'season': ep.parentIndex,
+                'episode': ep.index,
+                'ep_title': ep.title,
+                'synopsis': ep.summary or 'No synopsis available.',
+                'poster_url': (
+                    f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else
+                    f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else
+                    fallback_url
+                )
+            } for ep in eps]
 
             html_body = template.render(episodes=episodes_ctx)
             plain_body = "\n".join([
