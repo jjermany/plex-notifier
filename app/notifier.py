@@ -1,5 +1,4 @@
-# notifier.py (fixed version)
-
+# notifier.py
 import os
 import smtplib
 import requests
@@ -13,6 +12,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from flask import current_app, Flask
 from typing import List, Dict, Any
 from .config import Settings
+from datetime import timezone
+from email.mime.image import MIMEImage
 import logging
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -30,7 +31,7 @@ def start_scheduler(app, interval) -> BackgroundScheduler:
     app.logger.info(f"Scheduler started, interval={interval}min")
     return sched
 
-def check_new_episodes(app) -> None:
+def check_new_episodes(app, override_interval_minutes: int = None) -> None:
     with app.app_context():
         current_app.logger.info("🕒 Running check_new_episodes job")
         s = Settings.query.first()
@@ -38,17 +39,31 @@ def check_new_episodes(app) -> None:
             current_app.logger.warning("⚠️ No settings found; skipping.")
             return
 
-        cutoff_dt = datetime.utcnow() - timedelta(minutes=s.notify_interval or 30)
+        interval = override_interval_minutes or s.notify_interval or 30
+        cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
 
         try:
             plex = PlexServer(s.plex_url, s.plex_token)
             tv = plex.library.section('TV Shows')
-            all_eps = tv.search(libtype='episode', sort='addedAt:desc')
-            recent_eps = [
-                ep for ep in all_eps
-                if isinstance(ep, Episode) and ep.addedAt and ep.addedAt >= cutoff_dt
-            ][:50]
-            current_app.logger.info(f"Found {len(recent_eps)} recent episodes since {cutoff_dt}")
+            all_eps = tv.search(libtype='episode')
+
+            recent_eps = []
+            for ep in all_eps:
+                if not isinstance(ep, Episode) or not ep.addedAt:
+                    continue
+
+                added_at_utc = ep.addedAt.astimezone(timezone.utc)
+
+            if added_at_utc >= cutoff_dt:
+                recent_eps.append(ep)
+                current_app.logger.debug(
+                    f"🧪 Accepted: {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} - addedAt={added_at_utc}"
+                )
+
+                if added_at_utc >= cutoff_dt:
+                    recent_eps.append(ep)
+
+            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {cutoff_dt}")
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
             return
@@ -57,7 +72,7 @@ def check_new_episodes(app) -> None:
             current_app.logger.info("⚠️ No recent episodes found.")
             return
 
-        users = _get_users(s)
+        users = [u for u in _get_users(s) if u.get('email') != s.from_address]
         if not users:
             current_app.logger.info("⚠️ No users fetched.")
             return
@@ -70,19 +85,28 @@ def check_new_episodes(app) -> None:
             email = user_email or s.from_address
             watchable: List[Episode] = []
 
+            current_app.logger.debug(f"🔍 Checking user {user_email} (user_id={uid})")
+
             for ep in recent_eps:
                 show_key = ep.grandparentRatingKey
                 if not show_key:
                     continue
 
-                # Check if user has watched any episode from this show
                 if not _user_has_watched_show(s, uid, show_key):
+                    current_app.logger.debug(
+                        f"⛔ Skipping {ep.grandparentTitle} for {user_email} — user has never watched this show"
+                    )
                     continue
 
-                # Skip if user already watched this episode
                 if _user_has_history(s, uid, ep.ratingKey):
+                    current_app.logger.debug(
+                        f"⏩ Skipping {ep.grandparentTitle} S{ep.parentIndex}E{ep.index} for {user_email} — already watched"
+                    )
                     continue
 
+                current_app.logger.debug(
+                    f"✅ Will notify {user_email} about {ep.grandparentTitle} S{ep.parentIndex}E{ep.index}"
+                )
                 watchable.append(ep)
 
             if watchable:
@@ -124,6 +148,22 @@ def check_new_episodes(app) -> None:
             msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
             msg.attach(MIMEText(html_body, 'html', 'utf-8'))
 
+            # Embed poster images as inline attachments
+            for idx, ep in enumerate(eps, start=1):
+                try:
+                    image_url = ep.thumb if hasattr(ep, 'thumb') else None
+                    if image_url:
+                        img_resp = requests.get(image_url, stream=True, timeout=10)
+                        img_resp.raise_for_status()
+                        img_data = img_resp.content
+
+                        image_part = MIMEImage(img_data)
+                        image_part.add_header('Content-ID', f'<poster{idx}>')
+                        image_part.add_header('Content-Disposition', 'inline', filename=f'poster{idx}.jpg')
+                        msg.attach(image_part)
+                except Exception as e:
+                    current_app.logger.warning(f"Could not attach poster for {ep.title}: {e}")
+
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
 
@@ -160,12 +200,13 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
                 'cmd': 'get_history',
                 'user_id': user_id,
                 'rating_key': rating_key,
-                'length': 1
+                'length': 100
             },
             timeout=10
         )
         resp.raise_for_status()
-        history = resp.json().get('response', {}).get('data', [])
+        top_data = resp.json().get('response', {}).get('data', {})
+        history = top_data.get('data', [])
         return len(history) > 0
     except Exception as e:
         current_app.logger.error(f"Error querying Tautulli history for user {user_id}: {e}")
@@ -181,12 +222,13 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
                 'cmd': 'get_history',
                 'user_id': user_id,
                 'grandparent_rating_key': grandparent_rating_key,
-                'length': 1
+                'length': 100
             },
             timeout=10
         )
         resp.raise_for_status()
-        history = resp.json().get('response', {}).get('data', [])
+        top_data = resp.json().get('response', {}).get('data', {})
+        history = top_data.get('data', [])
         return len(history) > 0
     except Exception as e:
         current_app.logger.error(f"Error checking show history for user {user_id}: {e}")
