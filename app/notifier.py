@@ -59,7 +59,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 ep for ep in all_eps
                 if isinstance(ep, Episode) and ep.addedAt and ep.addedAt.astimezone(timezone.utc) >= cutoff_dt
             ]
-            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {cutoff_dt}")
+            local_time = cutoff_dt.astimezone()
+            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
+
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
             return
