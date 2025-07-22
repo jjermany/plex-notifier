@@ -110,40 +110,59 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             msg['From'] = s.from_address
             msg['To'] = email
 
-            episodes_ctx = []
+            images_attached = {}
+            grouped = {}
+
             for idx, ep in enumerate(eps, start=1):
-                poster_url = (
-                    f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else
-                    f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else
-                    fallback_url
-                )
+                show_key = ep.grandparentTitle
+                if show_key not in grouped:
+                    grouped[show_key] = []
 
+                # Handle show poster (once per group)
+                if show_key not in images_attached:
+                    show_poster_url = f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else fallback_url
+                    try:
+                        show_img = requests.get(show_poster_url, timeout=10)
+                        show_img.raise_for_status()
+                        cid_show = f"show_{idx}"
+                        img = MIMEImage(show_img.content)
+                        img.add_header("Content-ID", f"<{cid_show}>")
+                        img.add_header("Content-Disposition", "inline", filename=f"{cid_show}.jpg")
+                        msg.attach(img)
+                        images_attached[show_key] = f"cid:{cid_show}"
+                    except Exception as e:
+                        current_app.logger.warning(f"Show poster failed: {e}")
+                        images_attached[show_key] = fallback_url
+
+                # Handle episode poster
+                episode_url = f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else fallback_url
                 try:
-                    poster_data = requests.get(poster_url, timeout=10)
-                    poster_data.raise_for_status()
-                    img = MIMEImage(poster_data.content)
-                    cid = f"poster{idx}"
-                    img.add_header("Content-ID", f"<{cid}>")
-                    img.add_header("Content-Disposition", "inline", filename=f"{cid}.jpg")
+                    episode_img = requests.get(episode_url, timeout=10)
+                    episode_img.raise_for_status()
+                    cid_ep = f"ep_{idx}"
+                    img = MIMEImage(episode_img.content)
+                    img.add_header("Content-ID", f"<{cid_ep}>")
+                    img.add_header("Content-Disposition", "inline", filename=f"{cid_ep}.jpg")
                     msg.attach(img)
-                    poster_ref = f"cid:{cid}"
+                    episode_ref = f"cid:{cid_ep}"
                 except Exception as e:
-                    current_app.logger.warning(f"Poster fetch failed for {poster_url}: {e}")
-                    poster_ref = fallback_url
+                    current_app.logger.warning(f"Episode poster failed: {e}")
+                    episode_ref = fallback_url
 
-                episodes_ctx.append({
+                grouped[show_key].append({
                     'show_title': ep.grandparentTitle,
                     'season': ep.parentIndex,
                     'episode': ep.index,
                     'ep_title': ep.title,
                     'synopsis': ep.summary or 'No synopsis available.',
-                    'poster_ref': poster_ref
+                    'episode_poster_ref': episode_ref,
+                    'show_poster_ref': images_attached[show_key],
                 })
 
-            html_body = template.render(episodes=episodes_ctx)
+            html_body = template.render(grouped_episodes=grouped)
             plain_body = "\n".join([
                 f"{e['show_title']} S{e['season']:02}E{e['episode']:02} - {e['ep_title']}"
-                for e in episodes_ctx
+                for group in grouped.values() for e in group
             ])
 
             msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
@@ -151,6 +170,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
+
+            # Removed duplicate block that referenced undefined 'episodes_ctx'
 
 def _get_users(s: Settings) -> List[Dict[str, Any]]:
     if s.tautulli_url and s.tautulli_api_key:
