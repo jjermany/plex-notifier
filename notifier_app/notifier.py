@@ -233,6 +233,7 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
         return False
 
 def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: Any) -> bool:
+    """Return True if user has watched at least 90% of any episode in the show."""
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
         resp = requests.get(
@@ -248,7 +249,16 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
         )
         resp.raise_for_status()
         history = resp.json().get('response', {}).get('data', {}).get('data', [])
-        return len(history) > 0
+
+        for item in history:
+            duration = item.get('duration', 0)
+            watched_status = item.get('watched_status')
+            watched_duration = item.get('watched', 0)
+
+            if watched_status and duration > 0 and watched_duration / duration >= 0.9:
+                return True
+
+        return False
     except Exception as e:
         current_app.logger.error(f"Error checking show history for user {user_id}: {e}")
         return False
