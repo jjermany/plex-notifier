@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from typing import List, Dict, Any
+from logging.handlers import RotatingFileHandler
 
 from flask import current_app, Flask
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -19,6 +20,14 @@ from apscheduler.schedulers.base import BaseScheduler
 from .config import Settings
 
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+
+# Setup notification logger
+notif_logger = logging.getLogger("notifications")
+notif_logger.setLevel(logging.INFO)
+notif_log_path = os.path.join(os.path.dirname(__file__), "notifications.log")
+notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
+notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+notif_logger.addHandler(notif_handler)
 
 def start_scheduler(app, interval) -> BackgroundScheduler:
     sched = BackgroundScheduler()
@@ -91,10 +100,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             for ep in recent_eps:
                 show_key = ep.grandparentRatingKey
                 if not show_key:
+                    current_app.logger.debug(f"⏩ Skipping {ep.title} — missing grandparentRatingKey")
                     continue
                 if not _user_has_watched_show(s, uid, show_key):
+                    current_app.logger.debug(f"⏩ Skipping {ep.title} — user hasn’t watched show (≥90%)")
                     continue
                 if _user_has_history(s, uid, ep.ratingKey):
+                    current_app.logger.debug(f"⏩ Skipping {ep.title} — already watched by user")
                     continue
                 watchable.append(ep)
 
@@ -178,7 +190,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
-                
+            notif_logger.info(
+                f"Sent to {email} | Episodes: {', '.join(f'{e.grandparentTitle} S{e.parentIndex}E{e.index}' for e in eps)}"
+            )
         current_app.logger.info("✅ check_new_episodes job completed.")
         scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
         if scheduler:
