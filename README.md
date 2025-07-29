@@ -18,9 +18,9 @@ Built with Docker, designed for Unraid, and powered by Tautulli.
   - Plex and Tautulli credentials
   - Email (SMTP) settings
   - Notification interval
-- ✅ Users can unsubscribe globally or per-show
+- ✅ Users can unsubscribe globally or per-show (Beta)
 - 🔐 Optional HTTP Basic Auth for admin access
-- 📄 Per-user logs stored locally for review
+- 📄 Per-user logs stored locally for review (Beta)
 - 🐳 Runs cleanly in Docker with Unraid support
 
 ---
