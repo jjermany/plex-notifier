@@ -129,6 +129,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
+            scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
+            if scheduler:
+                job = scheduler.get_job('check_job')
+                if job and job.next_run_time:
+                    current_app.logger.info(
+                        f"⏭️ Next scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                    )
             return
 
         tmpl_dir = os.path.join(app.root_path, 'templates')
