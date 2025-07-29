@@ -48,6 +48,16 @@ def start_scheduler(app, interval) -> BackgroundScheduler:
     sched.start()
     app.logger.info(f"Scheduler started, interval={interval}min")
 
+    # Log the first scheduled run time
+    job = sched.get_job('check_job')
+    if job and job.next_run_time:
+        app.logger.info(
+            f"⏭️ First scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}"
+        )
+    else:
+        app.logger.warning("⚠️ Could not determine first scheduled run time.")
+
+
     if not hasattr(app, 'extensions'):
         app.extensions = {}
     app.extensions['apscheduler'] = sched
@@ -136,6 +146,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     current_app.logger.info(
                         f"⏭️ Next scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}"
                     )
+
             return
 
         tmpl_dir = os.path.join(app.root_path, 'templates')
@@ -224,7 +235,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         if scheduler:
             job = scheduler.get_job('check_job')
             if job and job.next_run_time:
-                current_app.logger.info(f"⏭️ Next scheduled run at {job.next_run_time.isoformat()}")
+                current_app.logger.info(f"⏭️ Next scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
             else:
                 current_app.logger.warning("⚠️ Could not retrieve next_run_time from scheduler.")
 
