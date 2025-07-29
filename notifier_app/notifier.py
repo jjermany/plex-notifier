@@ -126,7 +126,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             if watchable:
                 user_eps[user_email] = watchable
-                current_app.logger.info(f"User {user_email} will receive {len(watchable)} episodes")
+                current_app.logger.debug(f"{user_email} matched {len(watchable)} episode(s)")
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
