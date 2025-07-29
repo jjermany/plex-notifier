@@ -27,7 +27,14 @@ def requires_auth(f):
     return decorated
 
 def create_app():
-    logging.basicConfig(level=logging.DEBUG)
+    log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
+    level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
+    logging.basicConfig(level=level, format=log_format)
+
+    # Suppress overly verbose logs
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
 
@@ -171,9 +178,9 @@ def create_app():
         global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
         opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
 
-        log_dir = os.path.join(os.path.dirname(__file__), "user_logs")
+        log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
         safe_email = email.replace("@", "_at_").replace(".", "_dot_")
-        log_file = os.path.join(log_dir, f"{safe_email}.log")
+        log_file = os.path.join(log_dir, f"{safe_email}-notification.log")
 
         shows = set()
         if os.path.exists(log_file):

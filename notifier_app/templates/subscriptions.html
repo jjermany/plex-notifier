@@ -8,7 +8,7 @@
 </head>
 <body>
 <div class="container mt-5">
-  <h2 class="text-white mb-4">Manage Your Subscriptions</h2>
+  <h2 class="text-white mb-4">Manage Your Notification Preferences</h2>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -30,10 +30,17 @@
         <label class="form-check-label text-white" for="globalOptOut">
           Unsubscribe from all notifications
         </label>
+        <p class="text-muted mt-1">
+          Checking this will disable all episode alerts for this email address.
+        </p>
       </div>
 
       <!-- Per-Show Preferences -->
-      <h5 class="text-white">Shows You've Been Notified About</h5>
+      <h5 class="text-white">Opt Out of Individual Shows</h5>
+      <p class="text-muted" style="margin-top: -10px;">
+        Check the box next to any show you no longer wish to receive notifications for.
+      </p>
+
       {% if shows %}
         <div class="mb-3">
           {% for show in shows %}
@@ -49,10 +56,10 @@
         <p class="text-muted">No shows found in your notification history.</p>
       {% endif %}
 
-      <button type="submit" class="btn btn-warning mt-4">Update Preferences</button>
+      <button type="submit" class="btn btn-warning mt-4">Save My Notification Preferences</button>
     </form>
   {% else %}
-    <div class="alert alert-danger">No email address provided.</div>
+    <div class="alert alert-danger">No email address provided or token is invalid.</div>
   {% endif %}
 </div>
 </body>

@@ -24,7 +24,9 @@ from .config import Settings, UserPreferences
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 notif_logger = logging.getLogger("notifications")
 notif_logger.setLevel(logging.INFO)
-notif_log_path = os.path.join(os.path.dirname(__file__), "notifications.log")
+notif_log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+os.makedirs(notif_log_dir, exist_ok=True)
+notif_log_path = os.path.join(notif_log_dir, "notifications.log")
 notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
 notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
@@ -221,17 +223,25 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
 
 def get_user_logger(email):
-    safe_email = email.replace("@", "_at_").replace(".", "_dot_")
-    log_dir = os.path.join(os.path.dirname(__file__), "user_logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"{safe_email}.log")
+    from logging.handlers import RotatingFileHandler
 
-    logger = logging.getLogger(f"userlog.{safe_email}")
+    local_part = email.split("@")[0]
+    filename = f"{local_part}-notification.log"
+
+    log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, filename)
+
+    logger_name = f"userlog.{local_part}"
+    logger = logging.getLogger(logger_name)
+    logger.propagate = False  # ✅ keep console clean
+
     if not logger.handlers:
-        handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=0)
+        handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=1)
         handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+
     return logger
 
 
