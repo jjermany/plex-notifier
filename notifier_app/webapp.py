@@ -48,7 +48,11 @@ def create_app():
         db.create_all()
         s = Settings.query.first()
         if not s:
-            s = Settings(notify_interval=30)
+            s = Settings(
+                plex_url="http://localhost:32400",
+                plex_token="placeholder",
+                notify_interval=30
+            )
             db.session.add(s)
             db.session.commit()
 
@@ -97,12 +101,18 @@ def create_app():
         form = TestEmailForm()
         if form.validate_on_submit():
             try:
-                _send_email(
-                    s,
-                    form.test_email.data,
-                    '📧 Plex Notifier Test Email',
-                    '<p>If you can read this, your email settings are correct!</p>'
-                )
+                from email.mime.multipart import MIMEMultipart
+                from email.mime.text import MIMEText
+
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = '📧 Plex Notifier Test Email'
+                msg['From'] = s.from_address
+                msg['To'] = form.test_email.data
+
+                html_body = '<p>If you can read this, your email settings are correct!</p>'
+                msg.attach(MIMEText(html_body, 'html'))
+
+                _send_email(s, msg)
                 flash(f'Test email sent to {form.test_email.data}!', 'success')
             except Exception as e:
                 flash(f'Failed to send test email: {e}', 'danger')
