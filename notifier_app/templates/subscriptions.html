@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Manage Subscriptions</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<div class="container mt-5">
+  <h2 class="text-white mb-4">Manage Your Subscriptions</h2>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% if email %}
+    <form method="POST">
+      <!-- Secure Token -->
+      <input type="hidden" name="token" value="{{ token }}">
+
+      <!-- Global Opt-Out -->
+      <div class="form-check form-switch mb-4">
+        <input class="form-check-input" type="checkbox" id="globalOptOut" name="global_opt_out"
+               {% if global_opt_out %}checked{% endif %}>
+        <label class="form-check-label text-white" for="globalOptOut">
+          Unsubscribe from all notifications
+        </label>
+      </div>
+
+      <!-- Per-Show Preferences -->
+      <h5 class="text-white">Shows You've Been Notified About</h5>
+      {% if shows %}
+        <div class="mb-3">
+          {% for show in shows %}
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox"
+                     id="show_{{ loop.index }}" name="show_optouts" value="{{ show }}"
+                     {% if show in opted_out_shows %}checked{% endif %}>
+              <label class="form-check-label text-white" for="show_{{ loop.index }}">{{ show }}</label>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-muted">No shows found in your notification history.</p>
+      {% endif %}
+
+      <button type="submit" class="btn btn-warning mt-4">Update Preferences</button>
+    </form>
+  {% else %}
+    <div class="alert alert-danger">No email address provided.</div>
+  {% endif %}
+</div>
+</body>
+</html>

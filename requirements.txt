@@ -1,0 +1,10 @@
+Flask
+Flask-WTF
+Flask-SQLAlchemy
+APScheduler
+plexapi
+requests
+Jinja2
+python-dotenv
+email_validator
+gunicorn

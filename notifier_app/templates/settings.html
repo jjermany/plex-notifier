@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Plex Notifier Settings</title>
+  <link rel="icon" type="image/png" href="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  <style>
+    body {
+      background: url("https://raw.githubusercontent.com/jjermany/plex-notifier/36b5738a0e77901b8719c5753236ce3d87debe06/media/settings_background.png")
+                  no-repeat center center fixed;
+      background-size: cover;
+    }
+    .container-custom {
+      background: rgba(33, 37, 41, 0.85);
+      padding: 2rem;
+      border-radius: 0.5rem;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class="container container-custom py-4">
+    <!-- Header with Logo -->
+    <div class="d-flex align-items-center mb-4">
+      <img src="https://github.com/jjermany/plex-notifier/blob/main/media/logo.png?raw=true"
+           alt="Notifier Logo" height="48" class="me-3">
+      <h1 class="mb-0 text-white">Plex Notifier Settings</h1>
+    </div>
+
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <!-- Settings Form -->
+    <form method="post" action="{{ url_for('settings') }}" novalidate>
+      {{ form.hidden_tag() }}
+
+      <!-- Plex & Tautulli Card -->
+      <div class="card mb-4">
+        <div class="card-header">Plex &amp; Tautulli</div>
+        <div class="card-body">
+          <!-- Plex URL -->
+          <div class="mb-3">
+            {{ form.plex_url.label(class="form-label text-white") }}
+            {{ form.plex_url(class="form-control", placeholder="http://localhost:32400") }}
+            {% if form.plex_url.errors %}
+              <div class="text-danger small">{{ form.plex_url.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <!-- Plex Token -->
+          <div class="mb-3">
+            {{ form.plex_token.label(class="form-label text-white") }}
+            <div class="input-group">
+              {{ form.plex_token(class="form-control", type="password", id="plex_token") }}
+              <button class="btn btn-outline-secondary" type="button" id="togglePlexToken">
+                <i class="bi bi-eye" id="iconPlexToken"></i>
+              </button>
+            </div>
+            {% if form.plex_token.errors %}
+              <div class="text-danger small">{{ form.plex_token.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <!-- Tautulli URL -->
+          <div class="mb-3">
+            {{ form.tautulli_url.label(class="form-label text-white") }}
+            {{ form.tautulli_url(class="form-control", placeholder="http://localhost:8181") }}
+            {% if form.tautulli_url.errors %}
+              <div class="text-danger small">{{ form.tautulli_url.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <!-- Tautulli API Key -->
+          <div class="mb-3">
+            {{ form.tautulli_api_key.label(class="form-label text-white") }}
+            <div class="input-group">
+              {{ form.tautulli_api_key(class="form-control", type="password", id="tautulli_api_key") }}
+              <button class="btn btn-outline-secondary" type="button" id="toggleTautulliKey">
+                <i class="bi bi-eye" id="iconTautulliKey"></i>
+              </button>
+            </div>
+            {% if form.tautulli_api_key.errors %}
+              <div class="text-danger small">{{ form.tautulli_api_key.errors[0] }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Email Settings Card -->
+      <div class="card mb-4">
+        <div class="card-header">Email Settings</div>
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-8">
+              {{ form.smtp_host.label(class="form-label text-white") }}
+              {{ form.smtp_host(class="form-control", placeholder="smtp.example.com") }}
+              {% if form.smtp_host.errors %}
+                <div class="text-danger small">{{ form.smtp_host.errors[0] }}</div>
+              {% endif %}
+            </div>
+            <div class="col-md-4">
+              {{ form.smtp_port.label(class="form-label text-white") }}
+              {{ form.smtp_port(class="form-control") }}
+              {% if form.smtp_port.errors %}
+                <div class="text-danger small">{{ form.smtp_port.errors[0] }}</div>
+              {% endif %}
+            </div>
+          </div>
+          <div class="mb-3">
+            {{ form.smtp_user.label(class="form-label text-white") }}
+            {{ form.smtp_user(class="form-control") }}
+            {% if form.smtp_user.errors %}
+              <div class="text-danger small">{{ form.smtp_user.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ form.smtp_pass.label(class="form-label text-white") }}
+            {{ form.smtp_pass(class="form-control", type="password") }}
+            {% if form.smtp_pass.errors %}
+              <div class="text-danger small">{{ form.smtp_pass.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ form.from_address.label(class="form-label text-white") }}
+            {{ form.from_address(class="form-control") }}
+            {% if form.from_address.errors %}
+              <div class="text-danger small">{{ form.from_address.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <!-- Base URL -->
+          <div class="mb-3">
+            {{ form.base_url.label(class="form-label text-white") }}
+            {{ form.base_url(class="form-control", placeholder="http://localhost:5000") }}
+            {% if form.base_url.errors %}
+              <div class="text-danger small">{{ form.base_url.errors[0] }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Poll Interval Card -->
+      <div class="card mb-4">
+        <div class="card-header">Polling Interval</div>
+        <div class="card-body">
+          <div class="mb-3">
+            {{ form.notify_interval.label(class="form-label text-white") }}
+            {{ form.notify_interval(class="form-control", placeholder="30") }}
+            <div class="form-text text-light">
+              Minutes between polling for new episodes (default 30)
+            </div>
+            {% if form.notify_interval.errors %}
+              <div class="text-danger small">{{ form.notify_interval.errors[0] }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Save Button -->
+      <div class="card mb-4">
+        <div class="card-body text-start">
+          <button type="submit" class="btn btn-success">Save Settings</button>
+        </div>
+      </div>
+    </form>
+
+    <!-- Run Now (last 24h) -->
+    <div class="mb-4 text-start">
+      <form method="post" action="{{ url_for('run_check') }}" id="runForm">
+        <button type="submit" class="btn btn-warning" id="runNowBtn">Run Now (last 24h)</button>
+      </form>
+    </div>
+
+    <!-- Test Email Card -->
+    <div class="card">
+      <div class="card-header">Test Email</div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('send_test_email') }}" id="testForm">
+          {{ test_form.hidden_tag() }}
+          <div class="mb-3">
+            {{ test_form.test_email.label(class="form-label text-white") }}
+            {{ test_form.test_email(class="form-control", placeholder="you@example.com") }}
+            {% if test_form.test_email.errors %}
+              <div class="text-danger small">{{ test_form.test_email.errors[0] }}</div>
+            {% endif %}
+          </div>
+          <button type="submit" class="btn btn-secondary" id="testEmailBtn">Send Test Email</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<!-- Toggle Scripts -->
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // Show/hide Plex token
+    document.getElementById('togglePlexToken')?.addEventListener('click', function () {
+      const input = document.getElementById('plex_token');
+      const icon = document.getElementById('iconPlexToken');
+      if (input?.type === 'password') {
+        input.type = 'text';
+        icon?.classList.replace('bi-eye', 'bi-eye-slash');
+      } else {
+        input.type = 'password';
+        icon?.classList.replace('bi-eye-slash', 'bi-eye');
+      }
+    });
+
+    // Show/hide Tautulli key
+    document.getElementById('toggleTautulliKey')?.addEventListener('click', function () {
+      const input = document.getElementById('tautulli_api_key');
+      const icon = document.getElementById('iconTautulliKey');
+      if (input?.type === 'password') {
+        input.type = 'text';
+        icon?.classList.replace('bi-eye', 'bi-eye-slash');
+      } else {
+        input.type = 'password';
+        icon?.classList.replace('bi-eye-slash', 'bi-eye');
+      }
+    });
+
+    // Disable "Save Settings" on submit
+    const settingsForm = document.querySelector('form[action="{{ url_for("settings") }}"]');
+    settingsForm?.addEventListener('submit', function () {
+      settingsForm.querySelector('button[type="submit"]')?.setAttribute('disabled', 'disabled');
+    });
+
+    // Disable "Run Now" on submit
+    const runForm = document.querySelector('form[action="{{ url_for("run_check") }}"]');
+    runForm?.addEventListener('submit', function () {
+      runForm.querySelector('button[type="submit"]')?.setAttribute('disabled', 'disabled');
+    });
+
+    // Disable "Test Email" on submit
+    const testForm = document.getElementById('testForm');
+    testForm?.addEventListener('submit', () => {
+      document.getElementById('testEmailBtn')?.setAttribute('disabled', 'disabled');
+    });
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+
