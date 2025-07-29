@@ -179,8 +179,8 @@ def create_app():
         opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
 
         log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
-        safe_email = email.replace("@", "_at_").replace(".", "_dot_")
-        log_file = os.path.join(log_dir, f"{safe_email}-notification.log")
+        local_part = email.split("@")[0]
+        log_file = os.path.join(log_dir, f"{local_part}-notification.log")
 
         shows = set()
         if os.path.exists(log_file):
