@@ -30,6 +30,7 @@ notif_log_path = os.path.join(notif_log_dir, "notifications.log")
 notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
 notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
+notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
 
 # Token serializer
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
