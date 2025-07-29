@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png" alt="Plex Notifier Logo" width="150"/>
+</p>
+
 # 📺 Plex Notifier
 
 Plex Notifier is a lightweight Flask-based web service that monitors your Plex library and emails users when new episodes are available — **but only for shows they’ve already shown interest in** (i.e. fully watched at least one episode).
