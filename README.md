@@ -184,3 +184,10 @@ After starting the container, navigate to the Web UI (e.g. `http://localhost:500
 ### 🧪 Testing
 - Use the **"Send Test Email"** form to verify SMTP settings.
 - Use **"Run Now (last 24h)"** to manually trigger a check for new episodes.
+
+## ☕ Support
+
+If you find Plex Notifier helpful, consider supporting the project:
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-%23FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jermcee)
+
