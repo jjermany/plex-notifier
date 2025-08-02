@@ -1,16 +1,15 @@
-name: Docker Build Cloud - Main Branch
+name: Docker Build and Push
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
 
 jobs:
-  build:
+  docker:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Log in to Docker Hub
@@ -21,12 +20,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: cloud
-          endpoint: "jjermany/plex-notifier"
-          install: true
 
-      - name: Build and Push
+      - name: Build and Push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
