@@ -19,7 +19,7 @@ jobs:
       - name: Debug secrets
         run: |
           echo "Docker Hub username: ${{ secrets.DOCKERHUB_USERNAME }}"
-          if [ -n "$DOCKERHUB_TOKEN" ]; then
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
             echo "Docker Hub token is set ✅"
           else
             echo "Docker Hub token is missing ❌"
@@ -52,8 +52,6 @@ jobs:
             jermcee/plex-notifier
             ghcr.io/jjermany/plex-notifier
           tags: |
-            type=sha,format=short
-            type=ref,event=branch
             type=raw,value=beta,enable=${{ github.ref == 'refs/heads/beta' }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
