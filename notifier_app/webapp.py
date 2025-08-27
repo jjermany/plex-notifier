@@ -252,7 +252,10 @@ def create_app():
             count = 0
             if os.path.exists(user_file):
                 with open(user_file, 'r', encoding='utf-8') as f:
-                    count = sum(1 for ln in f if 'Notified:' in ln)
+                    count = 0
+                    for ln in f:
+                        if 'Notified:' in ln:
+                            count += 1
             user_counts[u] = count
 
         email = request.args.get('email')
