@@ -1,12 +1,28 @@
 import os
 import logging
 import threading
+from queue import Queue
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences
 from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
+
+
+class QueueLogHandler(logging.Handler):
+    """Queue logging records so they can be streamed via SSE."""
+
+    def __init__(self, queue: Queue):
+        super().__init__()
+        self.queue = queue
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        self.queue.put(msg)
+
+
+log_queue: Queue = Queue()
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -30,6 +46,9 @@ def create_app():
     log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
     logging.basicConfig(level=level, format=log_format)
+    queue_handler = QueueLogHandler(log_queue)
+    queue_handler.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(queue_handler)
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -37,6 +56,7 @@ def create_app():
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
+    app.config['log_queue'] = log_queue
 
     os.makedirs(app.instance_path, exist_ok=True)
     db_path = os.path.join(app.instance_path, 'config.sqlite3')
@@ -202,6 +222,22 @@ def create_app():
             shows=sorted(shows),
             opted_out_shows=opted_out_shows,
         )
+
+    @app.route('/logs')
+    @requires_auth
+    def logs():
+        return render_template('logs.html')
+
+    @app.route('/logs/stream')
+    @requires_auth
+    def log_stream():
+        def generate():
+            q = app.config['log_queue']
+            while True:
+                msg = q.get()
+                yield f"data: {msg}\n\n"
+
+        return Response(generate(), mimetype='text/event-stream')
 
     register_debug_route(app)
     return app
