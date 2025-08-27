@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Live Logs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <style>
+    #log-box {
+      white-space: pre-wrap;
+      font-family: monospace;
+      background-color: #000;
+      color: #0f0;
+      padding: 1rem;
+      border-radius: 0.5rem;
+      height: 70vh;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body class="p-4">
+  <div class="container">
+    <div class="mb-3">
+      <a href="{{ url_for('settings') }}" class="btn btn-secondary">&larr; Back to Settings</a>
+    </div>
+    <h1 class="mb-4">Live Logs</h1>
+    <div id="log-box"></div>
+  </div>
+  <script>
+    const logBox = document.getElementById('log-box');
+    const evtSource = new EventSource("{{ url_for('logs_stream') }}");
+    evtSource.onmessage = (e) => {
+      logBox.textContent += e.data + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    };
+  </script>
+</body>
+</html>

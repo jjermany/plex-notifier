@@ -1,6 +1,8 @@
 import os
 import logging
+import threading
 from functools import wraps
+from queue import Queue
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, NotificationHistory
@@ -9,6 +11,27 @@ from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
+
+# 📡 Live log streaming
+log_queue: "Queue[logging.LogRecord]" = Queue()
+
+
+class LogQueueHandler(logging.Handler):
+    """Push log records into a queue for Server-Sent Events."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        log_queue.put(record)
+
+
+def stream_logs():
+    """Generator yielding log records for SSE clients."""
+    formatter = TZFormatter(
+        '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+        '%Y-%m-%d %I:%M:%S %p %Z'
+    )
+    while True:
+        record = log_queue.get()
+        yield f"data: {formatter.format(record)}\n\n"
 
 # 🔐 Auth helpers
 def check_auth(username, password):
@@ -32,6 +55,10 @@ def create_app():
     handler = logging.StreamHandler()
     handler.setFormatter(TZFormatter(log_format, '%Y-%m-%d %I:%M:%S %p %Z'))
     logging.basicConfig(level=level, handlers=[handler])
+
+    queue_handler = LogQueueHandler()
+    queue_handler.setLevel(level)
+    logging.getLogger().addHandler(queue_handler)
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -223,6 +250,16 @@ def create_app():
             NotificationHistory.sent_at.desc()
         ).limit(HISTORY_LIMIT).all()
         return render_template('history.html', entries=entries)
+
+    @app.route('/logs')
+    @requires_auth
+    def logs():
+        return render_template('logs.html')
+
+    @app.route('/logs/stream')
+    @requires_auth
+    def logs_stream():
+        return Response(stream_logs(), mimetype='text/event-stream')
 
     register_debug_route(app)
     return app
