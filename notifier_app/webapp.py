@@ -221,7 +221,11 @@ def create_app():
                 lines = f.readlines()[-100:]
             for line in reversed(lines):
                 if " | " in line:
-                    ts, msg = line.strip().split(" | ", 1)
+                    parts = line.strip().split(" | ", 1)
+                    if len(parts) == 2:
+                        ts, msg = parts
+                    else:
+                        ts, msg = "", line.strip()
                     date_part = ts.split(' ')[0]
                     try:
                         dt = datetime.strptime(date_part, "%m/%d/%Y")
