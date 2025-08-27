@@ -31,6 +31,10 @@
       <h1 class="mb-0 text-white">Plex Notifier Settings</h1>
     </div>
 
+    <div class="mb-4 text-start">
+      <a href="{{ url_for('logs') }}" class="btn btn-info">Live Logs</a>
+    </div>
+
     <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
