@@ -1,28 +1,19 @@
 import os
+import re
 import logging
 import threading
-from queue import Queue
 from functools import wraps
+from collections import Counter
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences
+from .utils import normalize_email
 from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
-
-
-class QueueLogHandler(logging.Handler):
-    """Queue logging records so they can be streamed via SSE."""
-
-    def __init__(self, queue: Queue):
-        super().__init__()
-        self.queue = queue
-
-    def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        self.queue.put(msg)
-
-
-log_queue: Queue = Queue()
+from .logging_utils import TZFormatter
+from sqlalchemy import inspect, text
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -45,10 +36,9 @@ def requires_auth(f):
 def create_app():
     log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
-    logging.basicConfig(level=level, format=log_format)
-    queue_handler = QueueLogHandler(log_queue)
-    queue_handler.setFormatter(logging.Formatter(log_format))
-    logging.getLogger().addHandler(queue_handler)
+    handler = logging.StreamHandler()
+    handler.setFormatter(TZFormatter(log_format))
+    logging.basicConfig(level=level, handlers=[handler])
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -56,7 +46,6 @@ def create_app():
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
-    app.config['log_queue'] = log_queue
 
     os.makedirs(app.instance_path, exist_ok=True)
     db_path = os.path.join(app.instance_path, 'config.sqlite3')
@@ -73,6 +62,14 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        inspector = inspect(db.engine)
+        existing_cols = {c['name'] for c in inspector.get_columns('settings')}
+        conn = db.engine.connect()
+        if 'notify_interval' not in existing_cols:
+            conn.execute(text('ALTER TABLE settings ADD COLUMN notify_interval INTEGER DEFAULT 30'))
+        if 'base_url' not in existing_cols:
+            conn.execute(text('ALTER TABLE settings ADD COLUMN base_url VARCHAR'))
+        conn.close()
         s = Settings.query.first()
         if not s:
             s = Settings(
@@ -172,6 +169,7 @@ def create_app():
 
         try:
             email = serializer.loads(token, salt="unsubscribe", max_age=86400 * 7)
+            canon = normalize_email(email)
         except BadSignature:
             return render_template("subscriptions.html", email=None)
 
@@ -179,27 +177,36 @@ def create_app():
             global_opt_out = bool(request.form.get("global_opt_out"))
             show_optouts = request.form.getlist("show_optouts")
 
-            pref = UserPreferences.query.filter_by(email=email, show_key=None).first()
+            pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
             if not pref:
-                pref = UserPreferences(email=email)
+                pref = UserPreferences.query.filter_by(email=email, show_key=None).first()
+                if pref:
+                    pref.email = canon
+                else:
+                    pref = UserPreferences(email=canon)
             pref.global_opt_out = global_opt_out
             db.session.add(pref)
 
-            UserPreferences.query.filter(UserPreferences.email == email, UserPreferences.show_key != None).delete()
+            UserPreferences.query.filter(
+                UserPreferences.email.in_([canon, email]),
+                UserPreferences.show_key != None
+            ).delete(synchronize_session=False)
 
             for show_key in show_optouts:
-                db.session.add(UserPreferences(email=email, show_key=show_key, show_opt_out=True))
+                db.session.add(UserPreferences(email=canon, show_key=show_key, show_opt_out=True))
 
             db.session.commit()
             flash("Preferences updated.", "success")
             return redirect(url_for("subscriptions") + f"?token={token}")
 
-        user_prefs = UserPreferences.query.filter_by(email=email).all()
+        user_prefs = UserPreferences.query.filter(
+            UserPreferences.email.in_([canon, email])
+        ).all()
         global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
         opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
 
         log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
-        local_part = email.split("@")[0]
+        local_part = canon
         log_file = os.path.join(log_dir, f"{local_part}-notification.log")
 
         shows = set()
@@ -223,21 +230,111 @@ def create_app():
             opted_out_shows=opted_out_shows,
         )
 
-    @app.route('/logs')
+    @app.route('/history')
     @requires_auth
-    def logs():
-        return render_template('logs.html')
+    def history():
+        log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+        notif_file = os.path.join(log_dir, "notifications.log")
+        tz = ZoneInfo(os.environ.get("TZ")) if os.environ.get("TZ") else None
 
-    @app.route('/logs/stream')
-    @requires_auth
-    def log_stream():
-        def generate():
-            q = app.config['log_queue']
-            while True:
-                msg = q.get()
-                yield f"data: {msg}\n\n"
+        def split_line(line: str):
+            if " | " in line:
+                return line.strip().split(" | ", 1)
+            m = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s*(.*)", line.strip())
+            if m:
+                return m.group(1), m.group(2)
+            return "", line.strip()
 
-        return Response(generate(), mimetype='text/event-stream')
+        def parse_ts(ts: str):
+            for fmt in ("%m/%d/%Y %I:%M%p %Z", "%Y-%m-%d %H:%M:%S,%f"):
+                try:
+                    dt = datetime.strptime(ts, fmt)
+                    if tz:
+                        dt = dt.replace(tzinfo=tz)
+                    return dt
+                except Exception:
+                    continue
+            return None
+
+        def fmt_dt(dt: datetime | None):
+            if not dt:
+                return ""
+            date = dt.strftime("%m/%d/%Y")
+            hour = dt.strftime("%I").lstrip('0') or '0'
+            minute = dt.strftime("%M")
+            ampm = dt.strftime("%p").lower()
+            zone = dt.strftime("%Z")
+            return f"{date} {hour}:{minute}{ampm} {zone}"
+
+        entries = []
+        monthly_totals = Counter()
+        if os.path.exists(notif_file):
+            with open(notif_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()[-100:]
+            for line in reversed(lines):
+                raw_ts, msg = split_line(line)
+                dt = parse_ts(raw_ts)
+                if dt:
+                    monthly_totals[dt.strftime("%Y-%m")] += 1
+                entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg})
+
+        users = {
+            normalize_email(p.email)
+            for p in UserPreferences.query.with_entities(UserPreferences.email).distinct()
+        }
+        if os.path.exists(log_dir):
+            for fn in os.listdir(log_dir):
+                if fn.endswith('-notification.log'):
+                    users.add(fn[:-len('-notification.log')])
+        users = sorted(users)
+
+        user_counts = {}
+        for u in users:
+            user_file = os.path.join(log_dir, f"{u}-notification.log")
+            count = 0
+            if os.path.exists(user_file):
+                with open(user_file, 'r', encoding='utf-8') as f:
+                    count = sum(1 for ln in f if 'Notified:' in ln)
+            user_counts[u] = count
+
+        email = normalize_email(request.args.get('email')) if request.args.get('email') else None
+        user_entries = []
+        global_opt_out = False
+        opted_out = []
+        if email:
+            user_file = os.path.join(log_dir, f"{email}-notification.log")
+            show_map = {}
+            if os.path.exists(user_file):
+                with open(user_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                for line in lines[-50:]:
+                    raw_ts, msg = split_line(line)
+                    dt = parse_ts(raw_ts)
+                    user_entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg})
+                for ln in lines:
+                    if "Notified:" in ln and "[Key:" in ln:
+                        try:
+                            title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
+                            key = ln.split("[Key:")[1].split("]")[0]
+                            show_map[key] = title
+                        except Exception:
+                            continue
+            prefs = UserPreferences.query.filter_by(email=email).all()
+            global_opt_out = any(p.global_opt_out for p in prefs if p.show_key is None)
+            opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
+
+        history_entries = user_entries if email else entries
+
+        return render_template(
+            'history.html',
+            email=email,
+            entries=history_entries,
+            global_opt_out=global_opt_out,
+            opted_out=opted_out,
+            users=users,
+            user_counts=user_counts,
+            monthly_totals=sorted(monthly_totals.items()),
+        )
 
     register_debug_route(app)
     return app
