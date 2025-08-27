@@ -7,13 +7,13 @@
 </head>
 <body class="p-4">
   <h1 class="mb-3">Live Logs</h1>
-  <pre id="logOutput" class="bg-dark text-success p-3" style="height:400px; overflow:auto;"></pre>
+  <div id="log-box" class="bg-dark text-success p-3" style="height:400px; overflow:auto; white-space:pre-wrap; font-family:monospace;"></div>
   <script>
-    const logElement = document.getElementById('logOutput');
-    const source = new EventSource("{{ url_for('log_stream') }}");
+    const logBox = document.getElementById('log-box');
+    const source = new EventSource("{{ url_for('logs_stream') }}");
     source.onmessage = function(e) {
-      logElement.textContent += e.data + "\n";
-      logElement.scrollTop = logElement.scrollHeight;
+      logBox.textContent += e.data + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
     };
   </script>
 </body>
