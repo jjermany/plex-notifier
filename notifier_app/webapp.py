@@ -260,17 +260,18 @@ def create_app():
             user_file = os.path.join(log_dir, f"{local_part}-notification.log")
             show_map = {}
             if os.path.exists(user_file):
+                user_entries_deque = deque(maxlen=50)
                 with open(user_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                user_entries = [ln.strip() for ln in lines][-50:]
-                for ln in lines:
-                    if "Notified:" in ln and "[Key:" in ln:
-                        try:
-                            title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
-                            key = ln.split("[Key:")[1].split("]")[0]
-                            show_map[key] = title
-                        except Exception:
-                            continue
+                    for ln in f:
+                        user_entries_deque.append(ln.strip())
+                        if "Notified:" in ln and "[Key:" in ln:
+                            try:
+                                title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
+                                key = ln.split("[Key:")[1].split("]")[0]
+                                show_map[key] = title
+                            except Exception:
+                                continue
+                user_entries = list(user_entries_deque)
             prefs = UserPreferences.query.filter_by(email=email).all()
             global_opt_out = any(p.global_opt_out for p in prefs if p.show_key is None)
             opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
