@@ -14,9 +14,3 @@ class TZFormatter(logging.Formatter):
         dt = datetime.fromtimestamp(record.created, self.tz)
         if datefmt:
             return dt.strftime(datefmt)
-        date = dt.strftime("%m/%d/%Y")
-        hour = dt.strftime("%I").lstrip('0') or '0'
-        minute = dt.strftime("%M")
-        ampm = dt.strftime("%p").lower()
-        tz = dt.strftime("%Z")
-        return f"{date} {hour}:{minute}{ampm} {tz}"
