@@ -10,6 +10,9 @@ from email.mime.image import MIMEImage
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler
 
+from .logging_utils import TZFormatter
+from .utils import normalize_email
+
 from flask import current_app, Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -18,7 +21,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences
+from .config import Settings, UserPreferences, db
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -28,7 +31,7 @@ notif_log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
 os.makedirs(notif_log_dir, exist_ok=True)
 notif_log_path = os.path.join(notif_log_dir, "notifications.log")
 notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
-notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
 
@@ -106,12 +109,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         for user in users:
             uid = user.get('user_id')
             user_email = user.get('email')
-
             if not user_email or user_email == s.from_address:
                 continue
 
+            canon = normalize_email(user_email)
+
             # 🔒 Check global opt-out
-            pref = UserPreferences.query.filter_by(email=user_email, show_key=None).first()
+            pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
+            if not pref:
+                pref = UserPreferences.query.filter_by(email=user_email, show_key=None).first()
+                if pref and pref.email != canon:
+                    pref.email = canon
+                    db.session.commit()
             if pref and pref.global_opt_out:
                 continue
 
@@ -123,7 +132,12 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     continue
 
                 # 🔒 Check per-show opt-out
-                show_pref = UserPreferences.query.filter_by(email=user_email, show_key=str(show_key)).first()
+                show_pref = UserPreferences.query.filter_by(email=canon, show_key=str(show_key)).first()
+                if not show_pref:
+                    show_pref = UserPreferences.query.filter_by(email=user_email, show_key=str(show_key)).first()
+                    if show_pref and show_pref.email != canon:
+                        show_pref.email = canon
+                        db.session.commit()
                 if show_pref and show_pref.show_opt_out:
                     continue
 
@@ -243,7 +257,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 def get_user_logger(email):
     from logging.handlers import RotatingFileHandler
 
-    local_part = email.split("@")[0]
+    local_part = normalize_email(email)
     filename = f"{local_part}-notification.log"
 
     log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
@@ -256,7 +270,7 @@ def get_user_logger(email):
 
     if not logger.handlers:
         handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=1)
-        handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+        handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
