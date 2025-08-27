@@ -19,7 +19,7 @@ jobs:
       - name: Debug secrets
         run: |
           echo "Docker Hub username: ${{ secrets.DOCKERHUB_USERNAME }}"
-          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+          if [ -n "$DOCKERHUB_TOKEN" ]; then
             echo "Docker Hub token is set ✅"
           else
             echo "Docker Hub token is missing ❌"
