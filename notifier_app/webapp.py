@@ -218,7 +218,7 @@ def create_app():
         weekly_totals = Counter()
         if os.path.exists(notif_file):
             with open(notif_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()[-100:]
+                lines = list(deque(f, maxlen=100))
             for line in reversed(lines):
                 if " | " in line:
                     parts = line.strip().split(" | ", 1)
