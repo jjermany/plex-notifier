@@ -24,7 +24,7 @@
       <tbody>
         {% for n in entries %}
         <tr>
-          <td>{{ n.sent_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ n.sent_at|fmt_dt }}</td>
           <td>{{ n.email }}</td>
           <td>{{ n.details }}</td>
         </tr>

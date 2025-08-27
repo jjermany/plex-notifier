@@ -4,6 +4,7 @@ from functools import wraps
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, NotificationHistory
+from .utils import LOCAL_TZ, TZFormatter, HISTORY_LIMIT
 from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 
@@ -28,7 +29,9 @@ def requires_auth(f):
 def create_app():
     log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
-    logging.basicConfig(level=level, format=log_format)
+    handler = logging.StreamHandler()
+    handler.setFormatter(TZFormatter(log_format, '%Y-%m-%d %I:%M:%S %p %Z'))
+    logging.basicConfig(level=level, handlers=[handler])
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -66,6 +69,17 @@ def create_app():
         sched = start_scheduler(app, interval)
         app.config['scheduler'] = sched
         app.logger.info("✅ App initialized successfully.")
+
+    @app.template_filter('fmt_dt')
+    def fmt_dt(value):
+        if value is None:
+            return ''
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=LOCAL_TZ)
+        else:
+            dt = dt.astimezone(LOCAL_TZ)
+        return dt.strftime('%Y-%m-%d %I:%M %p %Z')
 
     @app.route('/', methods=['GET', 'POST'])
     @requires_auth
@@ -207,7 +221,7 @@ def create_app():
     def history():
         entries = NotificationHistory.query.order_by(
             NotificationHistory.sent_at.desc()
-        ).limit(100).all()
+        ).limit(HISTORY_LIMIT).all()
         return render_template('history.html', entries=entries)
 
     register_debug_route(app)

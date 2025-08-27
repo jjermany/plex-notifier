@@ -19,6 +19,7 @@ from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
 from .config import Settings, UserPreferences, NotificationHistory, db
+from .utils import LOCAL_TZ, TZFormatter, HISTORY_LIMIT
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -28,7 +29,7 @@ notif_log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
 os.makedirs(notif_log_dir, exist_ok=True)
 notif_log_path = os.path.join(notif_log_dir, "notifications.log")
 notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
-notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s', '%Y-%m-%d %I:%M:%S %p %Z'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
 
@@ -52,7 +53,7 @@ def start_scheduler(app, interval) -> BackgroundScheduler:
     job = sched.get_job('check_job')
     if job and job.next_run_time:
         app.logger.info(
-            f"⏭️ First scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}"
+            f"⏭️ First scheduled run at {job.next_run_time.astimezone(LOCAL_TZ).strftime('%Y-%m-%d %I:%M:%S %p %Z')}"
         )
     else:
         app.logger.warning("⚠️ Could not determine first scheduled run time.")
@@ -85,8 +86,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 ep for ep in all_eps
                 if isinstance(ep, Episode) and ep.addedAt and ep.addedAt.astimezone(timezone.utc) >= cutoff_dt
             ]
-            local_time = cutoff_dt.astimezone()
-            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
+            local_time = cutoff_dt.astimezone(LOCAL_TZ)
+            current_app.logger.info(
+                f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}"
+            )
 
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
@@ -144,7 +147,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 job = scheduler.get_job('check_job')
                 if job and job.next_run_time:
                     current_app.logger.info(
-                        f"⏭️ Next scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                    f"⏭️ Next scheduled run at {job.next_run_time.astimezone(LOCAL_TZ).strftime('%Y-%m-%d %I:%M:%S %p %Z')}"
                     )
 
             return
@@ -230,15 +233,25 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 f"{e.grandparentTitle} S{e.parentIndex}E{e.index}" for e in eps
             )
             notif_logger.info(f"Sent to {email} | Episodes: {summary}")
-            db.session.add(NotificationHistory(email=email, details=summary))
+            now = datetime.now(LOCAL_TZ)
+            db.session.add(NotificationHistory(email=email, details=summary, sent_at=now))
             db.session.commit()
+
+            # Prune old history entries beyond the configured limit
+            old_entries = NotificationHistory.query.order_by(
+                NotificationHistory.sent_at.desc()
+            ).offset(HISTORY_LIMIT).all()
+            if old_entries:
+                for old in old_entries:
+                    db.session.delete(old)
+                db.session.commit()
 
         current_app.logger.info("✅ check_new_episodes job completed.")
         scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
         if scheduler:
             job = scheduler.get_job('check_job')
             if job and job.next_run_time:
-                current_app.logger.info(f"⏭️ Next scheduled run at {job.next_run_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                current_app.logger.info(f"⏭️ Next scheduled run at {job.next_run_time.astimezone(LOCAL_TZ).strftime('%Y-%m-%d %I:%M:%S %p %Z')}")
             else:
                 current_app.logger.warning("⚠️ Could not retrieve next_run_time from scheduler.")
 
@@ -259,7 +272,7 @@ def get_user_logger(email):
 
     if not logger.handlers:
         handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=1)
-        handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+        handler.setFormatter(TZFormatter('%(asctime)s | %(message)s', '%Y-%m-%d %I:%M:%S %p %Z'))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
