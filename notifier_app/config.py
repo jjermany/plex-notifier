@@ -25,3 +25,10 @@ class UserPreferences(db.Model):
     show_key = db.Column(db.String, nullable=True)  # grandparentRatingKey
     show_opt_out = db.Column(db.Boolean, default=True)  # opt out of this show
 
+
+class NotificationHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String, nullable=False)
+    details = db.Column(db.Text, nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Notification History</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+</head>
+<body class="p-4">
+  <div class="container">
+    <div class="mb-3">
+      <a href="{{ url_for('settings') }}" class="btn btn-secondary">&larr; Back to Settings</a>
+    </div>
+    <h1 class="mb-4">Notification History</h1>
+    {% if entries %}
+    <table class="table table-striped">
+      <thead>
+        <tr>
+          <th>Sent At</th>
+          <th>Email</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n in entries %}
+        <tr>
+          <td>{{ n.sent_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ n.email }}</td>
+          <td>{{ n.details }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p>No notifications have been sent yet.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

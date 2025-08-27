@@ -1,10 +1,9 @@
 import os
 import logging
-import threading
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from .config import db, Settings, UserPreferences
+from .config import db, Settings, UserPreferences, NotificationHistory
 from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 
@@ -202,6 +201,14 @@ def create_app():
             shows=sorted(shows),
             opted_out_shows=opted_out_shows,
         )
+
+    @app.route('/history')
+    @requires_auth
+    def history():
+        entries = NotificationHistory.query.order_by(
+            NotificationHistory.sent_at.desc()
+        ).limit(100).all()
+        return render_template('history.html', entries=entries)
 
     register_debug_route(app)
     return app

@@ -18,7 +18,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences
+from .config import Settings, UserPreferences, NotificationHistory, db
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -226,9 +226,12 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 user_log.info(f"Notified: {ep.grandparentTitle} [Key:{ep.grandparentRatingKey}] S{ep.parentIndex}E{ep.index} - {ep.title}")
             _send_email(s, msg)
             current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
-            notif_logger.info(
-                f"Sent to {email} | Episodes: {', '.join(f'{e.grandparentTitle} S{e.parentIndex}E{e.index}' for e in eps)}"
+            summary = ', '.join(
+                f"{e.grandparentTitle} S{e.parentIndex}E{e.index}" for e in eps
             )
+            notif_logger.info(f"Sent to {email} | Episodes: {summary}")
+            db.session.add(NotificationHistory(email=email, details=summary))
+            db.session.commit()
 
         current_app.logger.info("✅ check_new_episodes job completed.")
         scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
