@@ -23,16 +23,19 @@
   </style>
 </head>
 <body>
-  <div class="container container-custom py-4">
+  <div class="d-flex">
+    <nav class="flex-shrink-0 p-3 bg-dark" style="width:200px; min-height:100vh;">
+      <ul class="nav nav-pills flex-column mb-auto">
+        <li class="nav-item"><a href="{{ url_for('settings') }}" class="nav-link text-white">Home</a></li>
+        <li><a href="{{ url_for('history') }}" class="nav-link text-white">History</a></li>
+      </ul>
+    </nav>
+    <div class="container container-custom py-4 flex-grow-1">
     <!-- Header with Logo -->
     <div class="d-flex align-items-center mb-4">
       <img src="https://github.com/jjermany/plex-notifier/blob/main/media/logo.png?raw=true"
            alt="Notifier Logo" height="48" class="me-3">
       <h1 class="mb-0 text-white">Plex Notifier Settings</h1>
-    </div>
-
-    <div class="mb-4 text-start">
-      <a href="{{ url_for('logs') }}" class="btn btn-info">Live Logs</a>
     </div>
 
     <!-- Flash messages -->
@@ -206,6 +209,7 @@
         <i class="bi bi-cup-hot"></i>
       </a>
     </div>
+</div>
 </div>
 
 <!-- Toggle Scripts -->
