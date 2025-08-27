@@ -10,19 +10,24 @@ from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 
 
-class QueueLogHandler(logging.Handler):
+LOG_FORMAT = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
+
+log_queue: "Queue[logging.LogRecord]" = Queue()
+
+
+class LogQueueHandler(logging.Handler):
     """Queue logging records so they can be streamed via SSE."""
 
-    def __init__(self, queue: Queue):
-        super().__init__()
-        self.queue = queue
-
     def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        self.queue.put(msg)
+        log_queue.put(record)
 
 
-log_queue: Queue = Queue()
+def stream_logs():
+    formatter = logging.Formatter(LOG_FORMAT)
+    while True:
+        record = log_queue.get()
+        yield f"data: {formatter.format(record)}\n\n"
+
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -43,12 +48,14 @@ def requires_auth(f):
     return decorated
 
 def create_app():
-    log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
-    logging.basicConfig(level=level, format=log_format)
-    queue_handler = QueueLogHandler(log_queue)
-    queue_handler.setFormatter(logging.Formatter(log_format))
-    logging.getLogger().addHandler(queue_handler)
+
+    stream_handler = logging.StreamHandler()
+    queue_handler = LogQueueHandler()
+    formatter = logging.Formatter(LOG_FORMAT)
+    stream_handler.setFormatter(formatter)
+    queue_handler.setFormatter(formatter)
+    logging.basicConfig(level=level, handlers=[stream_handler, queue_handler])
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -56,7 +63,6 @@ def create_app():
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
-    app.config['log_queue'] = log_queue
 
     os.makedirs(app.instance_path, exist_ok=True)
     db_path = os.path.join(app.instance_path, 'config.sqlite3')
@@ -230,14 +236,8 @@ def create_app():
 
     @app.route('/logs/stream')
     @requires_auth
-    def log_stream():
-        def generate():
-            q = app.config['log_queue']
-            while True:
-                msg = q.get()
-                yield f"data: {msg}\n\n"
-
-        return Response(generate(), mimetype='text/event-stream')
+    def logs_stream():
+        return Response(stream_logs(), mimetype='text/event-stream')
 
     register_debug_route(app)
     return app

@@ -10,7 +10,7 @@
   <pre id="logOutput" class="bg-dark text-success p-3" style="height:400px; overflow:auto;"></pre>
   <script>
     const logElement = document.getElementById('logOutput');
-    const source = new EventSource("{{ url_for('log_stream') }}");
+    const source = new EventSource("{{ url_for('logs_stream') }}");
     source.onmessage = function(e) {
       logElement.textContent += e.data + "\n";
       logElement.scrollTop = logElement.scrollHeight;
