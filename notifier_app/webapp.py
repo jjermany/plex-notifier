@@ -8,6 +8,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences
 from .forms import SettingsForm, TestEmailForm
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
+from .logging_utils import TZFormatter
 
 
 class QueueLogHandler(logging.Handler):
@@ -45,9 +46,11 @@ def requires_auth(f):
 def create_app():
     log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
-    logging.basicConfig(level=level, format=log_format)
+    handler = logging.StreamHandler()
+    handler.setFormatter(TZFormatter(log_format))
+    logging.basicConfig(level=level, handlers=[handler])
     queue_handler = QueueLogHandler(log_queue)
-    queue_handler.setFormatter(logging.Formatter(log_format))
+    queue_handler.setFormatter(TZFormatter(log_format))
     logging.getLogger().addHandler(queue_handler)
 
     # Suppress overly verbose logs
@@ -238,6 +241,55 @@ def create_app():
                 yield f"data: {msg}\n\n"
 
         return Response(generate(), mimetype='text/event-stream')
+
+    @app.route('/history')
+    @requires_auth
+    def history():
+        log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+        notif_file = os.path.join(log_dir, "notifications.log")
+        entries = []
+        if os.path.exists(notif_file):
+            with open(notif_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()[-100:]
+            for line in reversed(lines):
+                if " | " in line:
+                    ts, msg = line.strip().split(" | ", 1)
+                else:
+                    ts, msg = "", line.strip()
+                entries.append({'time': ts, 'message': msg})
+
+        email = request.args.get('email')
+        user_entries = []
+        global_opt_out = False
+        opted_out = []
+        if email:
+            local_part = email.split('@')[0]
+            user_file = os.path.join(log_dir, f"{local_part}-notification.log")
+            show_map = {}
+            if os.path.exists(user_file):
+                with open(user_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                user_entries = [ln.strip() for ln in lines][-50:]
+                for ln in lines:
+                    if "Notified:" in ln and "[Key:" in ln:
+                        try:
+                            title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
+                            key = ln.split("[Key:")[1].split("]")[0]
+                            show_map[key] = title
+                        except Exception:
+                            continue
+            prefs = UserPreferences.query.filter_by(email=email).all()
+            global_opt_out = any(p.global_opt_out for p in prefs if p.show_key is None)
+            opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
+
+        return render_template(
+            'history.html',
+            entries=entries,
+            email=email,
+            user_entries=user_entries,
+            global_opt_out=global_opt_out,
+            opted_out=opted_out,
+        )
 
     register_debug_route(app)
     return app

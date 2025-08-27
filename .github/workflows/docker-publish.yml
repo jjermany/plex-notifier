@@ -16,15 +16,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug secrets
-        run: |
-          echo "Docker Hub username: ${{ secrets.DOCKERHUB_USERNAME }}"
-          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            echo "Docker Hub token is set ✅"
-          else
-            echo "Docker Hub token is missing ❌"
-          fi
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 

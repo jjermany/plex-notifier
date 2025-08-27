@@ -10,6 +10,8 @@ from email.mime.image import MIMEImage
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler
 
+from .logging_utils import TZFormatter
+
 from flask import current_app, Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -28,7 +30,7 @@ notif_log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
 os.makedirs(notif_log_dir, exist_ok=True)
 notif_log_path = os.path.join(notif_log_dir, "notifications.log")
 notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
-notif_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
 
@@ -256,7 +258,7 @@ def get_user_logger(email):
 
     if not logger.handlers:
         handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=1)
-        handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+        handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
