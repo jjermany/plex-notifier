@@ -280,7 +280,7 @@ def create_app():
                 dt = parse_ts(raw_ts)
                 if dt:
                     monthly_totals[dt.strftime("%Y-%m")] += 1
-                entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg})
+                entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg, 'dt': dt})
 
         users = {
             normalize_email(p.email)
@@ -302,34 +302,48 @@ def create_app():
             user_counts[u] = count
         user_counts = dict(sorted(user_counts.items()))
 
-        email = normalize_email(request.args.get('email')) if request.args.get('email') else None
+        query = normalize_email(request.args.get('email')) if request.args.get('email') else None
+        page = max(int(request.args.get('page', 1)), 1)
+        per_page = 20
+
         user_entries = []
         global_opt_out = False
         opted_out = []
-        if email:
-            user_file = os.path.join(log_dir, f"{email}-notification.log")
-            show_map = {}
-            if os.path.exists(user_file):
-                with open(user_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                for line in lines[-50:]:
-                    raw_ts, msg = split_line(line)
-                    msg = strip_key(msg)
-                    dt = parse_ts(raw_ts)
-                    user_entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg})
-                for ln in lines:
-                    if "Notified:" in ln and "[Key:" in ln:
-                        try:
-                            title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
-                            key = ln.split("[Key:")[1].split("]")[0]
-                            show_map[key] = title
-                        except Exception:
-                            continue
-            prefs = UserPreferences.query.filter_by(email=email).all()
-            global_opt_out = any(p.global_opt_out for p in prefs if p.show_key is None)
-            opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
+        matched_users: list[str] = []
+        if query:
+            matched_users = [u for u in users if query in normalize_email(u)]
+            for u in matched_users:
+                user_file = os.path.join(log_dir, f"{u}-notification.log")
+                show_map = {}
+                if os.path.exists(user_file):
+                    with open(user_file, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    for line in lines[-50:]:
+                        raw_ts, msg = split_line(line)
+                        msg = strip_key(msg)
+                        dt = parse_ts(raw_ts)
+                        user_entries.append({'time': fmt_dt(dt) if dt else raw_ts, 'message': msg, 'dt': dt})
+                    for ln in lines:
+                        if "Notified:" in ln and "[Key:" in ln:
+                            try:
+                                title = ln.split("Notified: ")[1].split(" [Key:")[0].strip()
+                                key = ln.split("[Key:")[1].split("]")[0]
+                                show_map[key] = title
+                            except Exception:
+                                continue
+                if len(matched_users) == 1:
+                    prefs = UserPreferences.query.filter_by(email=u).all()
+                    global_opt_out = any(p.global_opt_out for p in prefs if p.show_key is None)
+                    opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
 
-        history_entries = user_entries if email else entries
+        history_entries = user_entries if matched_users else entries
+        single_user = len(matched_users) == 1
+        history_entries.sort(key=lambda e: e.get('dt') or datetime.min, reverse=True)
+
+        start = (page - 1) * per_page
+        end = start + per_page
+        paged_entries = history_entries[start:end]
+        total_pages = max((len(history_entries) - 1) // per_page + 1, 1)
 
         monthly_totals = [
             (datetime.strptime(p, "%Y-%m").strftime("%b %Y"), c)
@@ -338,13 +352,16 @@ def create_app():
 
         return render_template(
             'history.html',
-            email=email,
-            entries=history_entries,
+            email=query,
+            entries=paged_entries,
             global_opt_out=global_opt_out,
             opted_out=opted_out,
             users=users,
             user_counts=user_counts,
             monthly_totals=monthly_totals,
+            page=page,
+            total_pages=total_pages,
+            show_prefs=single_user,
         )
 
     register_debug_route(app)
