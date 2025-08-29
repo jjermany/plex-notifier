@@ -21,6 +21,7 @@ Built with Docker, designed for Unraid, and powered by Tautulli.
 - ✅ Users can unsubscribe globally or per-show (Beta)
 - 🔐 Optional HTTP Basic Auth for admin access
 - 📄 Per-user logs stored locally for review (Beta)
+- ♻️ Skips duplicate notifications by tracking each user's last 200 alerts
 - 🐳 Runs cleanly in Docker with Unraid support
 
 ---

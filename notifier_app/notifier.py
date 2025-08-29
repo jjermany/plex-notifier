@@ -7,7 +7,8 @@ from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
+from collections import deque
 from logging.handlers import RotatingFileHandler
 
 from .logging_utils import TZFormatter
@@ -37,6 +38,34 @@ notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid conso
 
 # Token serializer
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
+
+
+def _get_recent_notifications(email: str, limit: int = 200) -> Set[str]:
+    local_part = normalize_email(email)
+    log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+    log_path = os.path.join(log_dir, f"{local_part}-notification.log")
+    notified: Set[str] = set()
+    if not os.path.exists(log_path):
+        return notified
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = deque(f, maxlen=limit)
+        for line in lines:
+            line = line.strip()
+            if "Notified:" not in line:
+                continue
+            try:
+                _, body = line.split("Notified:", 1)
+                body = body.strip()
+                key_part = body.split("[Key:", 1)[1]
+                show_key, rest = key_part.split("]", 1)
+                season_ep = rest.strip().split(" - ", 1)[0]
+                notified.add(f"{show_key}|{season_ep}")
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return notified
 
 
 def start_scheduler(app, interval) -> BackgroundScheduler:
@@ -125,6 +154,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 continue
 
             watchable: List[Episode] = []
+            recent_notified = _get_recent_notifications(canon)
 
             for ep in recent_eps:
                 show_key = ep.grandparentRatingKey
@@ -144,6 +174,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if not _user_has_watched_show(s, uid, show_key):
                     continue
                 if _user_has_history(s, uid, ep.ratingKey):
+                    continue
+
+                ep_id = f"{show_key}|S{ep.parentIndex}E{ep.index}"
+                if ep_id in recent_notified:
                     continue
 
                 watchable.append(ep)
