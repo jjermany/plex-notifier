@@ -108,8 +108,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         interval = override_interval_minutes or s.notify_interval or 30
         cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
 
+        machine_id = None
+
         try:
             plex = PlexServer(s.plex_url, s.plex_token)
+            machine_id = plex.machineIdentifier
             tv = plex.library.section('TV Shows')
             all_eps = tv.search(libtype='episode')
 
@@ -203,6 +206,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
         fallback_url = "https://raw.githubusercontent.com/jjermany/plex-notifier/main/media/no-poster-dark.jpg"
 
+        plex_app_base = None
+        if machine_id:
+            plex_app_base = f"https://app.plex.tv/desktop#!/server/{machine_id}/details?key="
+
         for email, eps in user_eps.items():
             msg = MIMEMultipart('alternative')
             msg['Subject'] = f"{len(eps)} New Episode{'s' if len(eps) != 1 else ''} Available"
@@ -214,8 +221,20 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             for idx, ep in enumerate(eps, start=1):
                 show_title = ep.grandparentTitle
+                show_link = None
+                show_key = ep.grandparentRatingKey
+                if plex_app_base and show_key:
+                    show_link = f"{plex_app_base}{quote('/library/metadata/' + str(show_key))}"
+
                 if show_title not in grouped:
-                    grouped[show_title] = []
+                    grouped[show_title] = {
+                        'show_title': show_title,
+                        'show_poster_ref': fallback_url,
+                        'show_link': show_link,
+                        'episodes': [],
+                    }
+                elif not grouped[show_title]['show_link'] and show_link:
+                    grouped[show_title]['show_link'] = show_link
 
                 if show_title not in images_attached:
                     show_poster_url = f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else fallback_url
@@ -231,6 +250,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     except Exception:
                         images_attached[show_title] = fallback_url
 
+                grouped[show_title]['show_poster_ref'] = images_attached[show_title]
+
                 episode_url = f"{s.plex_url.rstrip('/')}{ep.thumb}?X-Plex-Token={s.plex_token}" if ep.thumb else fallback_url
                 try:
                     episode_img = requests.get(episode_url, timeout=10)
@@ -244,14 +265,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 except Exception:
                     episode_ref = fallback_url
 
-                grouped[show_title].append({
+                episode_link = None
+                if plex_app_base and ep.ratingKey:
+                    episode_link = f"{plex_app_base}{quote('/library/metadata/' + str(ep.ratingKey))}"
+
+                grouped[show_title]['episodes'].append({
                     'show_title': ep.grandparentTitle,
                     'season': ep.parentIndex,
                     'episode': ep.index,
                     'ep_title': ep.title,
                     'synopsis': ep.summary or 'No synopsis available.',
                     'episode_poster_ref': episode_ref,
-                    'show_poster_ref': images_attached[show_title],
+                    'episode_link': episode_link,
                 })
 
             token = serializer.dumps(email, salt="unsubscribe")
@@ -261,10 +286,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 email=email,
                 token=token
             )
-            plain_body = "\n".join([
-                f"{e['show_title']} S{e['season']:02}E{e['episode']:02} - {e['ep_title']}"
-                for group in grouped.values() for e in group
-            ])
+            plain_lines = []
+            for show in grouped.values():
+                if show['show_link']:
+                    plain_lines.append(f"{show['show_title']} - {show['show_link']}")
+                else:
+                    plain_lines.append(f"{show['show_title']}")
+                for ep in show['episodes']:
+                    episode_line = f"  S{ep['season']:02}E{ep['episode']:02} - {ep['ep_title']}"
+                    if ep['episode_link']:
+                        episode_line = f"{episode_line} ({ep['episode_link']})"
+                    plain_lines.append(episode_line)
+            plain_body = "\n".join(plain_lines)
 
             msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
             msg.attach(MIMEText(html_body, 'html', 'utf-8'))
