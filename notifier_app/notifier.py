@@ -425,6 +425,7 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
 
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
+        # Tautulli's API caps the history "length" parameter at 1000 records.
         page_length = 1000
         start = 0
         grandparent_key_str = str(grandparent_rating_key)
@@ -452,12 +453,14 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
                     return True
 
             records_filtered = payload.get('recordsFiltered')
-            if len(history) < page_length or (
-                isinstance(records_filtered, int) and start + page_length >= records_filtered
-            ):
+            if not history:
                 break
 
-            start += page_length
+            consumed = start + len(history)
+            if isinstance(records_filtered, int) and consumed >= records_filtered:
+                break
+
+            start = consumed
 
         return False
     except Exception as e:
