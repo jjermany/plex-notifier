@@ -78,6 +78,51 @@ class UserHasWatchedShowTests(unittest.TestCase):
         for params in captured_params:
             self.assertEqual(params.get("length"), page_length)
 
+    def test_handles_truncated_pages_until_records_filtered_consumed(self):
+        settings = DummySettings()
+        target_key = "456"
+        page_length = 1000
+        total_records = 250
+        captured_params = []
+
+        def make_payload(items):
+            return {
+                "response": {
+                    "data": {
+                        "recordsFiltered": total_records,
+                        "data": items,
+                    }
+                }
+            }
+
+        def fake_get(url, params=None, timeout=None):
+            captured_params.append(dict(params or {}))
+            start = params.get("start", 0)
+            if start == 0:
+                items = [{"grandparent_rating_key": target_key, "watched_status": 0}] * 100
+            elif start == 100:
+                items = [{"grandparent_rating_key": target_key, "watched_status": 0}] * 100
+            elif start == 200:
+                items = [
+                    {
+                        "grandparent_rating_key": target_key,
+                        "watched_status": "watched",
+                    }
+                ]
+            else:
+                items = []
+            return DummyResponse(make_payload(items))
+
+        with patch("notifier_app.notifier.requests.get", side_effect=fake_get):
+            self.assertTrue(
+                _user_has_watched_show(settings, user_id=99, grandparent_rating_key=target_key)
+            )
+
+        starts = [params.get("start") for params in captured_params]
+        self.assertEqual(starts[:3], [0, 100, 200])
+        for params in captured_params:
+            self.assertEqual(params.get("length"), page_length)
+
 
 if __name__ == "__main__":
     unittest.main()
