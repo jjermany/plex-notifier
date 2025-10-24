@@ -36,6 +36,20 @@ notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
 
+# Common affirmative values returned by Tautulli for watched history entries
+AFFIRMATIVE_WATCHED_STATUSES: Set[str] = {
+    "watched",
+    "played",
+    "complete",
+    "completed",
+    "finished",
+    "viewed",
+    "yes",
+    "true",
+    "fully_watched",
+    "fully watched",
+}
+
 # Token serializer
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -391,26 +405,59 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
 
 
 def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: Any) -> bool:
+    def _is_affirmative_watched(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value > 0
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                return False
+            try:
+                # Numeric strings such as "1" should be treated as watched
+                return float(normalized) > 0
+            except ValueError:
+                return normalized in AFFIRMATIVE_WATCHED_STATUSES
+        return False
+
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
-        resp = requests.get(
-            base,
-            params={
+        page_length = 1000
+        start = 0
+        grandparent_key_str = str(grandparent_rating_key)
+
+        while True:
+            params = {
                 'apikey': s.tautulli_api_key,
                 'cmd': 'get_history',
                 'user_id': user_id,
-                'length': 1000
-            },
-            timeout=10
-        )
-        resp.raise_for_status()
-        history = resp.json().get('response', {}).get('data', {}).get('data', [])
+                'grandparent_rating_key': grandparent_rating_key,
+                'start': start,
+                'length': page_length
+            }
+            resp = requests.get(base, params=params, timeout=10)
+            resp.raise_for_status()
 
-        for item in history:
-            gp_key = str(item.get('grandparent_rating_key'))
-            watched_status = item.get('watched_status')
-            if gp_key == str(grandparent_rating_key) and watched_status in (1, "1", True, "true", "True"):
-                return True
+            payload = resp.json().get('response', {}).get('data', {})
+            history = payload.get('data') or []
+
+            for item in history:
+                gp_key = str(item.get('grandparent_rating_key'))
+                if gp_key != grandparent_key_str:
+                    continue
+                if _is_affirmative_watched(item.get('watched_status')):
+                    return True
+
+            records_filtered = payload.get('recordsFiltered')
+            if len(history) < page_length or (
+                isinstance(records_filtered, int) and start + page_length >= records_filtered
+            ):
+                break
+
+            start += page_length
 
         return False
     except Exception as e:
