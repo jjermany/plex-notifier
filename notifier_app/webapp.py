@@ -67,6 +67,37 @@ def _migrate_legacy_notifications(app):
             file_imported = 0
             file_errors = 0
 
+            # Extract email from filename - handle both old and new formats
+            # Old format: localpart-notification.log (e.g., victoriaooi41-notification.log)
+            # New format: localpart_hash-notification.log (e.g., victoriaooi41_abc123-notification.log)
+            filename_base = log_file.replace("-notification.log", "")
+
+            # Try to find matching email in UserPreferences
+            user_email = None
+
+            # First, try exact match with new filename format
+            all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
+            for (pref_email,) in all_users:
+                if pref_email and email_to_filename(pref_email) == filename_base:
+                    user_email = normalize_email(pref_email)
+                    break
+
+            # If not found, try old format (just local part before @)
+            if not user_email:
+                for (pref_email,) in all_users:
+                    if pref_email:
+                        local_part = pref_email.split("@")[0].lower()
+                        if local_part == filename_base:
+                            user_email = normalize_email(pref_email)
+                            break
+
+            # If still not found, we can't import this file
+            if not user_email:
+                app.logger.warning(f"  ⚠ Could not determine email for {log_file}, skipping file")
+                continue
+
+            app.logger.info(f"  📧 Processing {log_file} for user {user_email}")
+
             for line in lines:
                 if "Notified:" not in line or "[Key:" not in line:
                     continue
@@ -113,21 +144,8 @@ def _migrate_legacy_notifications(app):
 
                     episode_title = rest.split(" - ", 1)[1].strip() if " - " in rest else ""
 
-                    # Extract email from filename (reverse the email_to_filename logic)
-                    # Filename format: localpart_hash-notification.log
-                    # We need to look up the actual email from UserPreferences
-                    filename_base = log_file.replace("-notification.log", "")
-
-                    # Try to find matching email in UserPreferences
-                    user_email = None
-                    all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
-                    for (pref_email,) in all_users:
-                        if pref_email and email_to_filename(pref_email) == filename_base:
-                            user_email = normalize_email(pref_email)
-                            break
-
-                    # If we couldn't find the email, skip this entry
-                    if not user_email or not season or not episode:
+                    # Skip if we couldn't parse season/episode
+                    if not season or not episode:
                         file_errors += 1
                         continue
 
