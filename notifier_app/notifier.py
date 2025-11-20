@@ -2,17 +2,34 @@ import os
 import smtplib
 import requests
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional, Tuple
 from collections import deque
 from logging.handlers import RotatingFileHandler
+from functools import lru_cache
+from cachetools import TTLCache
 
 from .logging_utils import TZFormatter
-from .utils import normalize_email
+from .utils import normalize_email, email_to_filename
+from .constants import (
+    NOTIFICATION_HISTORY_LIMIT,
+    NOTIFICATION_CACHE_TTL_SECONDS,
+    EMAIL_RETRY_ATTEMPTS,
+    EMAIL_RETRY_MIN_WAIT_SECONDS,
+    EMAIL_RETRY_MAX_WAIT_SECONDS,
+    USER_LOG_MAX_BYTES,
+    GLOBAL_LOG_MAX_BYTES,
+    LOG_BACKUP_COUNT,
+    TAUTULLI_MAX_PAGE_LENGTH,
+    API_RETRY_ATTEMPTS,
+    API_RETRY_MIN_WAIT_SECONDS,
+    API_RETRY_MAX_WAIT_SECONDS,
+)
 
 from flask import current_app, Flask
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,7 +39,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences, db
+from .config import Settings, UserPreferences, Notification, db
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -31,7 +48,7 @@ notif_logger.setLevel(logging.INFO)
 notif_log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
 os.makedirs(notif_log_dir, exist_ok=True)
 notif_log_path = os.path.join(notif_log_dir, "notifications.log")
-notif_handler = RotatingFileHandler(notif_log_path, maxBytes=100_000, backupCount=0)
+notif_handler = RotatingFileHandler(notif_log_path, maxBytes=GLOBAL_LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
 notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
@@ -50,35 +67,68 @@ AFFIRMATIVE_WATCHED_STATUSES: Set[str] = {
     "fully watched",
 }
 
-# Token serializer
-serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
+# Token serializer - validated at startup
+secret_key = os.environ.get("SECRET_KEY", "change-me")
+if secret_key == "change-me":
+    raise ValueError("SECRET_KEY must be set to a secure value, not 'change-me'")
+serializer = URLSafeTimedSerializer(secret_key)
+
+# In-memory cache for notification history (TTL cache with automatic expiry)
+# Key: email, Value: Set of notification identifiers
+notification_cache = TTLCache(maxsize=1000, ttl=NOTIFICATION_CACHE_TTL_SECONDS)
 
 
-def _get_recent_notifications(email: str, limit: int = 200) -> Set[str]:
-    local_part = normalize_email(email)
-    log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
-    log_path = os.path.join(log_dir, f"{local_part}-notification.log")
+def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMIT) -> Set[str]:
+    """Get recent notifications for a user, using cache when available."""
+    normalized_email = normalize_email(email)
+
+    # Check cache first
+    if normalized_email in notification_cache:
+        return notification_cache[normalized_email].copy()
+
     notified: Set[str] = set()
-    if not os.path.exists(log_path):
-        return notified
+
+    # Try database first (preferred method)
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
-            lines = deque(f, maxlen=limit)
-        for line in lines:
-            line = line.strip()
-            if "Notified:" not in line:
-                continue
+        recent_notifications = (
+            Notification.query
+            .filter_by(email=normalized_email)
+            .order_by(Notification.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        for notif in recent_notifications:
+            notified.add(f"{notif.show_key}|S{notif.season}E{notif.episode}")
+    except Exception as e:
+        current_app.logger.warning(f"Could not query database for notifications: {e}")
+
+    # Fallback to log file if database is empty (for backward compatibility)
+    if not notified:
+        filename = email_to_filename(email)
+        log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+        log_path = os.path.join(log_dir, f"{filename}-notification.log")
+        if os.path.exists(log_path):
             try:
-                _, body = line.split("Notified:", 1)
-                body = body.strip()
-                key_part = body.split("[Key:", 1)[1]
-                show_key, rest = key_part.split("]", 1)
-                season_ep = rest.strip().split(" - ", 1)[0]
-                notified.add(f"{show_key}|{season_ep}")
+                with open(log_path, "r", encoding="utf-8") as f:
+                    lines = deque(f, maxlen=limit)
+                for line in lines:
+                    line = line.strip()
+                    if "Notified:" not in line:
+                        continue
+                    try:
+                        _, body = line.split("Notified:", 1)
+                        body = body.strip()
+                        key_part = body.split("[Key:", 1)[1]
+                        show_key, rest = key_part.split("]", 1)
+                        season_ep = rest.strip().split(" - ", 1)[0]
+                        notified.add(f"{show_key}|{season_ep}")
+                    except Exception:
+                        continue
             except Exception:
-                continue
-    except Exception:
-        pass
+                pass
+
+    # Cache the result
+    notification_cache[normalized_email] = notified.copy()
     return notified
 
 
@@ -316,14 +366,23 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
             msg.attach(MIMEText(html_body, 'html', 'utf-8'))
 
-            user_log = get_user_logger(email)
-            for ep in eps:
-                user_log.info(f"Notified: {ep.grandparentTitle} [Key:{ep.grandparentRatingKey}] S{ep.parentIndex}E{ep.index} - {ep.title}")
-            _send_email(s, msg)
-            current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
-            notif_logger.info(
-                f"Sent to {email} | Episodes: {', '.join(f'{e.grandparentTitle} S{e.parentIndex}E{e.index}' for e in eps)}"
-            )
+            # Send email with retry logic
+            email_success = _send_email_with_retry(s, msg)
+
+            if email_success:
+                # Log to file
+                user_log = get_user_logger(email)
+                for ep in eps:
+                    user_log.info(f"Notified: {ep.grandparentTitle} [Key:{ep.grandparentRatingKey}] S{ep.parentIndex}E{ep.index} - {ep.title}")
+                    # Save to database for better tracking
+                    _save_notification_to_db(email, ep)
+
+                current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
+                notif_logger.info(
+                    f"Sent to {email} | Episodes: {', '.join(f'{e.grandparentTitle} S{e.parentIndex}E{e.index}' for e in eps)}"
+                )
+            else:
+                current_app.logger.error(f"❌ Failed to send email to {email} after all retry attempts")
 
         current_app.logger.info("✅ check_new_episodes job completed.")
         scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
@@ -338,24 +397,48 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 def get_user_logger(email):
     from logging.handlers import RotatingFileHandler
 
-    local_part = normalize_email(email)
-    filename = f"{local_part}-notification.log"
+    safe_filename = email_to_filename(email)
+    filename = f"{safe_filename}-notification.log"
 
     log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, filename)
 
-    logger_name = f"userlog.{local_part}"
+    logger_name = f"userlog.{safe_filename}"
     logger = logging.getLogger(logger_name)
     logger.propagate = False  # ✅ keep console clean
 
     if not logger.handlers:
-        handler = RotatingFileHandler(log_path, maxBytes=500_000, backupCount=1)
+        handler = RotatingFileHandler(log_path, maxBytes=USER_LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
         handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
     return logger
+
+
+def _save_notification_to_db(email: str, episode: Episode) -> None:
+    """Save notification to database for tracking and deduplication."""
+    try:
+        normalized_email = normalize_email(email)
+        notification = Notification(
+            email=normalized_email,
+            show_title=episode.grandparentTitle,
+            show_key=str(episode.grandparentRatingKey),
+            season=episode.parentIndex,
+            episode=episode.index,
+            episode_title=episode.title,
+            episode_key=str(episode.ratingKey) if episode.ratingKey else None
+        )
+        db.session.add(notification)
+        db.session.commit()
+
+        # Invalidate cache for this user
+        if normalized_email in notification_cache:
+            del notification_cache[normalized_email]
+    except Exception as e:
+        current_app.logger.error(f"Failed to save notification to database for {email}: {e}")
+        db.session.rollback()
 
 
 def _get_users(s: Settings) -> List[Dict[str, Any]]:
@@ -468,15 +551,44 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
         return False
 
 
+def _send_email_with_retry(s: Settings, msg: MIMEMultipart, max_attempts: int = EMAIL_RETRY_ATTEMPTS) -> bool:
+    """Send email with exponential backoff retry logic.
+
+    Returns True if email was sent successfully, False otherwise.
+    """
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            smtp = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=30)
+            smtp.starttls()
+            smtp.login(s.smtp_user, s.smtp_pass)
+            smtp.send_message(msg)
+            smtp.quit()
+            if attempt > 0:
+                current_app.logger.info(f"Email to {msg['To']} sent successfully on attempt {attempt + 1}")
+            return True
+        except Exception as e:
+            last_error = e
+            if attempt < max_attempts - 1:
+                wait_time = min(
+                    EMAIL_RETRY_MIN_WAIT_SECONDS * (2 ** attempt),
+                    EMAIL_RETRY_MAX_WAIT_SECONDS
+                )
+                current_app.logger.warning(
+                    f"Email send attempt {attempt + 1}/{max_attempts} failed for {msg['To']}: {e}. "
+                    f"Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                current_app.logger.error(
+                    f"Failed to send email to {msg['To']} after {max_attempts} attempts: {e}"
+                )
+    return False
+
+
 def _send_email(s: Settings, msg: MIMEMultipart) -> None:
-    try:
-        smtp = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=30)
-        smtp.starttls()
-        smtp.login(s.smtp_user, s.smtp_pass)
-        smtp.send_message(msg)
-        smtp.quit()
-    except Exception as e:
-        current_app.logger.error(f"Error sending email to {msg['To']}: {e}")
+    """Backward compatibility wrapper for _send_email_with_retry."""
+    _send_email_with_retry(s, msg)
 
 
 def register_debug_route(app: Flask):

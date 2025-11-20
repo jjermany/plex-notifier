@@ -1,6 +1,7 @@
 Flask
 Flask-WTF
 Flask-SQLAlchemy
+Flask-Limiter
 APScheduler
 plexapi
 requests
@@ -8,3 +9,4 @@ Jinja2
 python-dotenv
 email_validator
 gunicorn
+cachetools
