@@ -348,7 +348,8 @@ def create_app():
 
             # Get recent notification count
             from datetime import timedelta
-            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+            tz = ZoneInfo(os.environ.get("TZ")) if os.environ.get("TZ") else timezone.utc
+            one_hour_ago = datetime.now(tz) - timedelta(hours=1)
             recent_notifications = Notification.query.filter(
                 Notification.timestamp >= one_hour_ago
             ).count()
