@@ -21,6 +21,153 @@ from sqlalchemy import inspect, text
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
+
+def _migrate_legacy_notifications(app):
+    """
+    One-time migration of legacy log files to database.
+
+    Checks if Notification table is empty and if legacy log files exist.
+    If both conditions are met, parses log files and imports data into database.
+    """
+    # Check if migration is needed (Notification table is empty)
+    notification_count = Notification.query.count()
+    if notification_count > 0:
+        app.logger.info("Notification table already has data, skipping legacy migration")
+        return
+
+    log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
+    if not os.path.exists(log_dir):
+        app.logger.info("No legacy log directory found, skipping migration")
+        return
+
+    # Find all user notification log files
+    log_files = [
+        f for f in os.listdir(log_dir)
+        if f.endswith('-notification.log') and f != 'notifications.log'
+    ]
+
+    if not log_files:
+        app.logger.info("No legacy user notification logs found, skipping migration")
+        return
+
+    app.logger.info("=" * 80)
+    app.logger.info("🔄 Legacy notification logs detected - starting migration to database")
+    app.logger.info("=" * 80)
+
+    total_imported = 0
+    total_errors = 0
+
+    for log_file in log_files:
+        log_path = os.path.join(log_dir, log_file)
+
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            file_imported = 0
+            file_errors = 0
+
+            for line in lines:
+                if "Notified:" not in line or "[Key:" not in line:
+                    continue
+
+                try:
+                    # Parse timestamp
+                    timestamp_str = line.split("|")[0].strip()
+                    try:
+                        # Try multiple timestamp formats
+                        for fmt in ["%m/%d/%Y %I:%M%p %Z", "%Y-%m-%d %H:%M:%S,%f"]:
+                            try:
+                                timestamp = datetime.strptime(timestamp_str, fmt)
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # If no format worked, use current time
+                            timestamp = datetime.now()
+                    except:
+                        timestamp = datetime.now()
+
+                    # Parse notification details
+                    # Format: "Notified: Show Title [Key:12345] S1E2 - Episode Title"
+                    notif_part = line.split("Notified:")[1].strip()
+
+                    # Extract show title
+                    show_title = notif_part.split("[Key:")[0].strip()
+
+                    # Extract show key
+                    key_part = notif_part.split("[Key:")[1]
+                    show_key = key_part.split("]")[0].strip()
+
+                    # Extract season/episode and title
+                    rest = key_part.split("]", 1)[1].strip()
+                    season_ep_part = rest.split(" - ")[0].strip()
+
+                    # Parse S1E2 format
+                    season = None
+                    episode = None
+                    if season_ep_part.startswith("S") and "E" in season_ep_part:
+                        parts = season_ep_part[1:].split("E")
+                        season = int(parts[0])
+                        episode = int(parts[1])
+
+                    episode_title = rest.split(" - ", 1)[1].strip() if " - " in rest else ""
+
+                    # Extract email from filename (reverse the email_to_filename logic)
+                    # Filename format: localpart_hash-notification.log
+                    # We need to look up the actual email from UserPreferences
+                    filename_base = log_file.replace("-notification.log", "")
+
+                    # Try to find matching email in UserPreferences
+                    user_email = None
+                    all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
+                    for (pref_email,) in all_users:
+                        if pref_email and email_to_filename(pref_email) == filename_base:
+                            user_email = normalize_email(pref_email)
+                            break
+
+                    # If we couldn't find the email, skip this entry
+                    if not user_email or not season or not episode:
+                        file_errors += 1
+                        continue
+
+                    # Create notification record
+                    notification = Notification(
+                        email=user_email,
+                        show_title=show_title,
+                        show_key=show_key,
+                        season=season,
+                        episode=episode,
+                        episode_title=episode_title,
+                        timestamp=timestamp
+                    )
+
+                    db.session.add(notification)
+                    file_imported += 1
+
+                except Exception as e:
+                    file_errors += 1
+                    continue
+
+            # Commit after each file
+            try:
+                db.session.commit()
+                total_imported += file_imported
+                total_errors += file_errors
+                app.logger.info(f"  ✓ Migrated {file_imported} notifications from {log_file} ({file_errors} errors)")
+            except Exception as e:
+                db.session.rollback()
+                app.logger.error(f"  ✗ Failed to commit {log_file}: {e}")
+
+        except Exception as e:
+            app.logger.error(f"  ✗ Failed to read {log_file}: {e}")
+            continue
+
+    app.logger.info("=" * 80)
+    app.logger.info(f"✅ Migration complete: {total_imported} notifications imported, {total_errors} errors")
+    app.logger.info("=" * 80)
+
+
 # 🔐 Auth helpers
 def check_auth(username, password):
     return username == os.environ.get("WEBUI_USER") and password == os.environ.get("WEBUI_PASS")
@@ -130,6 +277,9 @@ def create_app():
             db.session.add(s)
             db.session.commit()
             app.logger.info("Created default settings")
+
+        # Migrate legacy log files to database on first run
+        _migrate_legacy_notifications(app)
 
         interval = s.notify_interval or 30
         sched = start_scheduler(app, interval)
