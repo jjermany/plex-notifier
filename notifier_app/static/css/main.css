@@ -1,0 +1,539 @@
+/* ========================================
+   Plex Notifier - Modern UI Stylesheet
+   ======================================== */
+
+/* ========== Global Styles ========== */
+:root {
+  --plex-orange: #e5a00d;
+  --plex-gold: #f39c12;
+  --plex-dark: #1a1a1a;
+  --plex-darker: #0d0d0d;
+  --card-bg: rgba(33, 37, 41, 0.95);
+  --card-hover: rgba(40, 44, 48, 0.95);
+  --transition-speed: 0.3s;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  transition: background-color var(--transition-speed) ease,
+              border-color var(--transition-speed) ease,
+              box-shadow var(--transition-speed) ease;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--plex-dark);
+  min-height: 100vh;
+}
+
+/* ========== Settings Page Background ========== */
+body.settings-page {
+  background: url("https://raw.githubusercontent.com/jjermany/plex-notifier/36b5738a0e77901b8719c5753236ce3d87debe06/media/settings_background.png")
+              no-repeat center center fixed;
+  background-size: cover;
+  position: relative;
+}
+
+body.settings-page::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.7) 0%, rgba(20, 20, 20, 0.8) 100%);
+  z-index: -1;
+}
+
+/* ========== Navigation Bar ========== */
+.navbar {
+  background: linear-gradient(90deg, #1a1a1a 0%, #2d2d2d 100%) !important;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+}
+
+.navbar-brand {
+  font-weight: 600;
+  font-size: 1.5rem;
+  color: var(--plex-orange) !important;
+  transition: transform var(--transition-speed) ease;
+}
+
+.navbar-brand:hover {
+  transform: scale(1.05);
+  color: var(--plex-gold) !important;
+}
+
+.nav-link {
+  position: relative;
+  font-weight: 500;
+  transition: color var(--transition-speed) ease;
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  height: 2px;
+  background: var(--plex-orange);
+  transform: translateX(-50%);
+  transition: width var(--transition-speed) ease;
+}
+
+.nav-link:hover::after,
+.nav-link.active::after {
+  width: 80%;
+}
+
+/* ========== Container ========== */
+.container-custom {
+  background: var(--card-bg);
+  padding: 2.5rem;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: fadeInUp 0.6s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ========== Cards ========== */
+.card {
+  background: var(--card-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-speed) ease,
+              box-shadow var(--transition-speed) ease;
+  overflow: hidden;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  background: var(--card-hover);
+}
+
+.card-header {
+  background: linear-gradient(90deg, rgba(229, 160, 13, 0.2) 0%, rgba(243, 156, 18, 0.1) 100%);
+  border-bottom: 2px solid var(--plex-orange);
+  font-weight: 600;
+  font-size: 1.1rem;
+  padding: 1rem 1.25rem;
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+/* ========== Forms ========== */
+.form-label {
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: #e0e0e0 !important;
+}
+
+.form-control,
+.form-select {
+  background-color: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  transition: border-color var(--transition-speed) ease,
+              box-shadow var(--transition-speed) ease;
+}
+
+.form-control:focus,
+.form-select:focus {
+  background-color: rgba(0, 0, 0, 0.4);
+  border-color: var(--plex-orange);
+  box-shadow: 0 0 0 0.25rem rgba(229, 160, 13, 0.25);
+  color: #ffffff;
+}
+
+.form-control::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* ========== Buttons ========== */
+.btn {
+  border-radius: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  transition: all var(--transition-speed) ease;
+  border: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.btn:hover::before {
+  width: 300px;
+  height: 300px;
+}
+
+.btn-success {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+}
+
+.btn-success:hover {
+  background: linear-gradient(135deg, #20c997 0%, #28a745 100%);
+  box-shadow: 0 6px 16px rgba(40, 167, 69, 0.4);
+  transform: translateY(-2px);
+}
+
+.btn-warning {
+  background: linear-gradient(135deg, var(--plex-orange) 0%, var(--plex-gold) 100%);
+  box-shadow: 0 4px 12px rgba(229, 160, 13, 0.3);
+  color: #000;
+}
+
+.btn-warning:hover {
+  background: linear-gradient(135deg, var(--plex-gold) 0%, var(--plex-orange) 100%);
+  box-shadow: 0 6px 16px rgba(229, 160, 13, 0.4);
+  transform: translateY(-2px);
+  color: #000;
+}
+
+.btn-secondary {
+  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+  box-shadow: 0 4px 12px rgba(108, 117, 125, 0.3);
+}
+
+.btn-secondary:hover {
+  background: linear-gradient(135deg, #5a6268 0%, #6c757d 100%);
+  box-shadow: 0 6px 16px rgba(108, 117, 125, 0.4);
+  transform: translateY(-2px);
+}
+
+.btn-outline-secondary {
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+}
+
+.btn-outline-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.btn-outline-light {
+  border: 2px solid rgba(255, 255, 255, 0.5);
+}
+
+.btn-outline-light:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--plex-orange);
+  color: var(--plex-orange) !important;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+/* ========== Alerts ========== */
+.alert {
+  border-radius: 0.75rem;
+  border: none;
+  box-shadow: var(--shadow-sm);
+  animation: slideInDown 0.4s ease;
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ========== Tables ========== */
+.table {
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.table thead th {
+  background: linear-gradient(90deg, rgba(229, 160, 13, 0.3) 0%, rgba(243, 156, 18, 0.2) 100%);
+  border: none;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+  padding: 1rem;
+}
+
+.table tbody tr {
+  transition: background-color var(--transition-speed) ease;
+}
+
+.table tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.table td {
+  padding: 0.75rem 1rem;
+  vertical-align: middle;
+}
+
+/* ========== Pagination ========== */
+.pagination {
+  margin-top: 1.5rem;
+}
+
+.page-link {
+  background-color: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  margin: 0 0.25rem;
+  border-radius: 0.5rem;
+  transition: all var(--transition-speed) ease;
+}
+
+.page-link:hover {
+  background-color: var(--plex-orange);
+  border-color: var(--plex-orange);
+  color: #000;
+  transform: translateY(-2px);
+}
+
+.page-item.active .page-link {
+  background-color: var(--plex-orange);
+  border-color: var(--plex-orange);
+  color: #000;
+  box-shadow: 0 4px 12px rgba(229, 160, 13, 0.3);
+}
+
+.page-item.disabled .page-link {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.1);
+  opacity: 0.5;
+}
+
+/* ========== Logo & Header ========== */
+.logo-header {
+  animation: fadeInLeft 0.6s ease;
+}
+
+@keyframes fadeInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.logo-header img {
+  transition: transform var(--transition-speed) ease;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+}
+
+.logo-header img:hover {
+  transform: rotate(5deg) scale(1.1);
+}
+
+/* ========== Input Groups ========== */
+.input-group .btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.75rem 1rem;
+}
+
+/* ========== Form Check/Switch ========== */
+.form-check-input {
+  background-color: rgba(0, 0, 0, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.form-check-input:checked {
+  background-color: var(--plex-orange);
+  border-color: var(--plex-orange);
+  box-shadow: 0 0 8px rgba(229, 160, 13, 0.4);
+}
+
+.form-check-input:focus {
+  border-color: var(--plex-orange);
+  box-shadow: 0 0 0 0.25rem rgba(229, 160, 13, 0.25);
+}
+
+.form-switch .form-check-input {
+  width: 3rem;
+  height: 1.5rem;
+}
+
+.form-check-label {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ========== Stats Lists ========== */
+.stats-list {
+  list-style: none;
+  padding: 0;
+}
+
+.stats-list li {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  border-left: 3px solid var(--plex-orange);
+  transition: all var(--transition-speed) ease;
+}
+
+.stats-list li:hover {
+  background: rgba(0, 0, 0, 0.3);
+  transform: translateX(5px);
+  border-left-width: 5px;
+}
+
+.stats-list a {
+  color: var(--plex-orange);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color var(--transition-speed) ease;
+}
+
+.stats-list a:hover {
+  color: var(--plex-gold);
+  text-decoration: underline;
+}
+
+/* ========== Loading States ========== */
+.btn.loading {
+  position: relative;
+  color: transparent !important;
+}
+
+.btn.loading::after {
+  content: '';
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  top: 50%;
+  left: 50%;
+  margin-left: -0.5rem;
+  margin-top: -0.5rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spinner 0.6s linear infinite;
+}
+
+@keyframes spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ========== Responsive Design ========== */
+@media (max-width: 768px) {
+  .container-custom {
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+  }
+
+  .card-body {
+    padding: 1rem;
+  }
+
+  .navbar-brand {
+    font-size: 1.25rem;
+  }
+
+  .btn {
+    padding: 0.625rem 1.25rem;
+  }
+}
+
+/* ========== Subscription Page Enhancements ========== */
+.subscription-container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.show-checkbox-list {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.show-checkbox-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.show-checkbox-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.show-checkbox-list::-webkit-scrollbar-thumb {
+  background: var(--plex-orange);
+  border-radius: 4px;
+}
+
+.show-checkbox-list::-webkit-scrollbar-thumb:hover {
+  background: var(--plex-gold);
+}
+
+/* ========== Text Colors ========== */
+.text-plex-orange {
+  color: var(--plex-orange) !important;
+}
+
+.text-plex-gold {
+  color: var(--plex-gold) !important;
+}
+
+/* ========== Utility Classes ========== */
+.shadow-custom {
+  box-shadow: var(--shadow-lg);
+}
+
+.hover-lift {
+  transition: transform var(--transition-speed) ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+}

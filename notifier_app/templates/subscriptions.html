@@ -2,65 +2,186 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Manage Subscriptions</title>
+  <title>Manage Subscriptions - Plex Notifier</title>
+  <link rel="icon" type="image/png" href="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body>
-<div class="container mt-5">
-  <h2 class="text-white mb-4">Manage Your Notification Preferences</h2>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">
+        <i class="bi bi-play-circle-fill"></i> Plex Notifier
+      </a>
+    </div>
+  </nav>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, message in messages %}
-        <div class="alert alert-{{ category }}">{{ message }}</div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
+  <div class="container subscription-container mt-5 mb-5">
+    <!-- Header -->
+    <div class="text-center mb-4">
+      <img src="https://github.com/jjermany/plex-notifier/blob/main/media/logo.png?raw=true"
+           alt="Notifier Logo"
+           height="64"
+           class="mb-3">
+      <h2 class="text-white mb-2">
+        <i class="bi bi-gear-fill"></i> Manage Your Notification Preferences
+      </h2>
+      <p class="text-muted">Control which notifications you receive from Plex Notifier</p>
+    </div>
 
-  {% if email %}
-    <form method="POST">
-      <!-- Secure Token -->
-      <input type="hidden" name="token" value="{{ token }}">
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            <i class="bi bi-{% if category == 'success' %}check-circle{% elif category == 'danger' %}exclamation-triangle{% else %}info-circle{% endif %}-fill me-2"></i>
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
 
-      <!-- Global Opt-Out -->
-      <div class="form-check form-switch mb-4">
-        <input class="form-check-input" type="checkbox" id="globalOptOut" name="global_opt_out"
-               {% if global_opt_out %}checked{% endif %}>
-        <label class="form-check-label text-white" for="globalOptOut">
-          Unsubscribe from all notifications
-        </label>
-        <p class="text-muted mt-1">
-          Checking this will disable all episode alerts for this email address.
-        </p>
+    {% if email %}
+      <!-- User Info Card -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-person-circle"></i> Subscription Settings for
+        </div>
+        <div class="card-body">
+          <p class="mb-0">
+            <i class="bi bi-envelope-fill text-plex-orange"></i>
+            <strong>{{ email }}</strong>
+          </p>
+        </div>
       </div>
 
-      <!-- Per-Show Preferences -->
-      <h5 class="text-white">Opt Out of Individual Shows</h5>
-      <p class="text-muted" style="margin-top: -10px;">
-        Check the box next to any show you no longer wish to receive notifications for.
-      </p>
+      <form method="POST">
+        <!-- Secure Token -->
+        <input type="hidden" name="token" value="{{ token }}">
 
-      {% if shows %}
-        <div class="mb-3">
-          {% for show in shows %}
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox"
-                     id="show_{{ loop.index }}" name="show_optouts" value="{{ show }}"
-                     {% if show in opted_out_shows %}checked{% endif %}>
-              <label class="form-check-label text-white" for="show_{{ loop.index }}">{{ show }}</label>
+        <!-- Global Opt-Out Card -->
+        <div class="card mb-4">
+          <div class="card-header">
+            <i class="bi bi-bell-slash-fill"></i> Global Notification Settings
+          </div>
+          <div class="card-body">
+            <div class="form-check form-switch">
+              <input class="form-check-input"
+                     type="checkbox"
+                     id="globalOptOut"
+                     name="global_opt_out"
+                     {% if global_opt_out %}checked{% endif %}
+                     style="width: 3rem; height: 1.5rem;">
+              <label class="form-check-label text-white ms-2" for="globalOptOut">
+                <strong>Unsubscribe from all notifications</strong>
+              </label>
             </div>
-          {% endfor %}
+            <div class="alert alert-warning mt-3 mb-0" role="alert">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              <strong>Note:</strong> Checking this will disable all episode alerts for this email address.
+              You will not receive any notifications until you turn this back off.
+            </div>
+          </div>
         </div>
-      {% else %}
-        <p class="text-muted">No shows found in your notification history.</p>
-      {% endif %}
 
-      <button type="submit" class="btn btn-warning mt-4">Save My Notification Preferences</button>
-    </form>
-  {% else %}
-    <div class="alert alert-danger">No email address provided or token is invalid.</div>
-  {% endif %}
-</div>
+        <!-- Per-Show Preferences Card -->
+        <div class="card mb-4">
+          <div class="card-header">
+            <i class="bi bi-tv-fill"></i> Individual Show Preferences
+          </div>
+          <div class="card-body">
+            <p class="text-white mb-3">
+              Check the box next to any show you no longer wish to receive notifications for.
+            </p>
+
+            {% if shows %}
+              <div class="show-checkbox-list">
+                {% for show in shows %}
+                  <div class="form-check mb-2">
+                    <input class="form-check-input"
+                           type="checkbox"
+                           id="show_{{ loop.index }}"
+                           name="show_optouts"
+                           value="{{ show }}"
+                           {% if show in opted_out_shows %}checked{% endif %}>
+                    <label class="form-check-label text-white" for="show_{{ loop.index }}">
+                      <i class="bi bi-film"></i> {{ show }}
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="text-center py-4">
+                <i class="bi bi-inbox" style="font-size: 3rem; color: var(--plex-orange);"></i>
+                <p class="text-muted mt-3 mb-0">No shows found in your notification history.</p>
+                <p class="text-muted">You'll see shows here once you start receiving notifications.</p>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Save Button -->
+        <div class="card">
+          <div class="card-body text-center">
+            <button type="submit" class="btn btn-warning btn-lg hover-lift px-5">
+              <i class="bi bi-check-circle-fill"></i> Save My Notification Preferences
+            </button>
+            <p class="text-muted mt-3 mb-0">
+              <i class="bi bi-info-circle"></i> Your preferences are saved securely and can be changed at any time.
+            </p>
+          </div>
+        </div>
+      </form>
+
+      <!-- Help Section -->
+      <div class="card mt-4 bg-transparent border-secondary">
+        <div class="card-body">
+          <h6 class="text-plex-orange mb-3">
+            <i class="bi bi-question-circle-fill"></i> Need Help?
+          </h6>
+          <ul class="text-light mb-0">
+            <li class="mb-2">
+              <strong>Global Opt-Out:</strong> Turns off all notifications completely
+            </li>
+            <li class="mb-2">
+              <strong>Individual Show Opt-Outs:</strong> Turn off notifications for specific shows only
+            </li>
+            <li class="mb-2">
+              <strong>Re-subscribe:</strong> Simply uncheck the boxes and save to start receiving notifications again
+            </li>
+          </ul>
+        </div>
+      </div>
+
+    {% else %}
+      <!-- Error State -->
+      <div class="card">
+        <div class="card-body text-center py-5">
+          <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size: 4rem;"></i>
+          <h4 class="text-white mt-4 mb-3">Invalid or Missing Token</h4>
+          <p class="text-muted mb-0">
+            No email address provided or the token is invalid.
+            Please use the link from your notification email to access this page.
+          </p>
+        </div>
+      </div>
+    {% endif %}
+
+    <!-- Footer -->
+    <div class="text-center mt-5 text-muted">
+      <p class="mb-1">
+        <i class="bi bi-shield-check"></i> Your privacy is important to us. Your preferences are stored securely.
+      </p>
+    </div>
+  </div>
+
+  <!-- Bootstrap Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Custom JavaScript -->
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
