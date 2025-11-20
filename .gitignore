@@ -63,3 +63,6 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Preview/Demo files
+email_preview.html
