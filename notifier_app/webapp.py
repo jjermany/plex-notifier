@@ -349,9 +349,13 @@ def create_app():
         paged_entries = history_entries[start:end]
         total_pages = max((len(history_entries) - 1) // per_page + 1, 1)
 
+        # Limit monthly stats to last 12 months
+        today = datetime.now()
+        twelve_months_ago = today.replace(year=today.year - 1)
         monthly_totals = [
             (datetime.strptime(p, "%Y-%m").strftime("%b %Y"), c)
             for p, c in sorted(monthly_totals.items())
+            if datetime.strptime(p, "%Y-%m") >= twelve_months_ago
         ]
 
         return render_template(
