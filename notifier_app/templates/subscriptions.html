@@ -106,10 +106,10 @@
                            type="checkbox"
                            id="show_{{ loop.index }}"
                            name="show_optouts"
-                           value="{{ show }}"
-                           {% if show in opted_out_shows %}checked{% endif %}>
+                           value="{{ show.key }}"
+                           {% if show.key in opted_out_shows %}checked{% endif %}>
                     <label class="form-check-label text-white" for="show_{{ loop.index }}">
-                      <i class="bi bi-film"></i> {{ show }}
+                      <i class="bi bi-film"></i> {{ show.title }}
                     </label>
                   </div>
                 {% endfor %}
