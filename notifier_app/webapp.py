@@ -25,9 +25,7 @@ serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 def _migrate_legacy_notifications(app):
     """
     One-time migration of legacy log files to database.
-
-    Checks if Notification table is empty and if legacy log files exist.
-    If both conditions are met, parses log files and imports data into database.
+    Prioritizes full email addresses from notifications.log over incomplete database entries.
     """
     # Check if migration is needed (Notification table is empty)
     notification_count = Notification.query.count()
@@ -57,16 +55,13 @@ def _migrate_legacy_notifications(app):
     total_imported = 0
     total_errors = 0
 
-    # First, build a map of local parts to full email addresses by scanning the main log
-    # The main notifications.log contains entries with full email addresses
+    # Build a map of local parts to full email addresses from notifications.log
     email_map = {}  # Maps local_part -> full_email
     main_log_path = os.path.join(log_dir, "notifications.log")
     if os.path.exists(main_log_path):
         try:
             with open(main_log_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    # Look for email addresses in the log
-                    import re
                     email_matches = re.findall(r'\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b', line)
                     for email in email_matches:
                         local = email.split('@')[0].lower()
@@ -86,51 +81,47 @@ def _migrate_legacy_notifications(app):
             file_imported = 0
             file_errors = 0
 
-            # Extract email from filename - handle both old and new formats
-            # Old format: localpart-notification.log (e.g., victoriaooi41-notification.log)
-            # New format: localpart_hash-notification.log (e.g., victoriaooi41_abc123-notification.log)
+            # Extract local part from filename
             filename_base = log_file.replace("-notification.log", "")
-
-            # Try to find matching email in UserPreferences
             user_email = None
 
-            # First, try exact match with new filename format
-            all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
+            # Strategy: Prefer email_map (from notifications.log) which has full emails
+            # Only fall back to database if not found in email_map
 
-            app.logger.debug(f"  🔍 Matching '{filename_base}' against {len(all_users)} users")
-
-            for (pref_email,) in all_users:
-                if pref_email and email_to_filename(pref_email) == filename_base:
-                    user_email = normalize_email(pref_email)
-                    app.logger.debug(f"    ✓ Matched via new format: {pref_email}")
-                    break
-
-            # If not found, try old format (just local part before @)
-            if not user_email:
-                for (pref_email,) in all_users:
-                    if pref_email:
-                        local_part = pref_email.split("@")[0].lower()
-                        app.logger.debug(f"    Comparing local_part '{local_part}' with filename_base '{filename_base}'")
-                        if local_part == filename_base:
-                            user_email = normalize_email(pref_email)
-                            app.logger.debug(f"    ✓ Matched via old format: {pref_email}")
-                            break
-
-            # If still not found, try the email map built from notifications.log
-            if not user_email and filename_base in email_map:
+            # First, try email map (most reliable - has full emails)
+            if filename_base in email_map:
                 user_email = normalize_email(email_map[filename_base])
-                app.logger.debug(f"    ✓ Matched via notifications.log mapping: {user_email}")
+                app.logger.info(f"  📧 Matched '{filename_base}' to {user_email} (from notifications.log)")
+            else:
+                # Fall back to database lookup
+                all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
+
+                # Try exact match with new filename format
+                for (pref_email,) in all_users:
+                    if pref_email and email_to_filename(pref_email) == filename_base:
+                        user_email = normalize_email(pref_email)
+                        break
+
+                # Try old format (just local part)
+                if not user_email:
+                    for (pref_email,) in all_users:
+                        if pref_email:
+                            local_part = pref_email.split("@")[0].lower() if "@" in pref_email else pref_email.lower()
+                            if local_part == filename_base:
+                                user_email = normalize_email(pref_email)
+                                break
+
+                if user_email:
+                    app.logger.info(f"  📧 Matched '{filename_base}' to {user_email} (from database)")
 
             # If still not found, we can't import this file
             if not user_email:
-                available_local_parts = [e[0].split("@")[0].lower() if e[0] and "@" in e[0] else str(e[0]).lower() for e in all_users if e[0]]
-                app.logger.warning(f"  ⚠ Could not determine email for {log_file}")
-                app.logger.info(f"     Tried to match '{filename_base}' against local parts: {available_local_parts[:5]}")
-                if email_map:
-                    app.logger.info(f"     Email map has: {list(email_map.keys())[:10]}")
+                app.logger.warning(f"  ⚠ Could not determine email for {log_file} - skipping")
                 continue
 
-            app.logger.info(f"  📧 Processing {log_file} for user {user_email}")
+            # Warn if email doesn't contain @ (incomplete email)
+            if '@' not in user_email:
+                app.logger.warning(f"  ⚠ Warning: {user_email} appears to be incomplete (missing domain)")
 
             for line in lines:
                 if "Notified:" not in line or "[Key:" not in line:
@@ -139,32 +130,19 @@ def _migrate_legacy_notifications(app):
                 try:
                     # Parse timestamp
                     timestamp_str = line.split("|")[0].strip()
-                    try:
-                        # Try multiple timestamp formats
-                        for fmt in ["%m/%d/%Y %I:%M%p %Z", "%Y-%m-%d %H:%M:%S,%f"]:
-                            try:
-                                timestamp = datetime.strptime(timestamp_str, fmt)
-                                break
-                            except ValueError:
-                                continue
-                        else:
-                            # If no format worked, use current time
-                            timestamp = datetime.now()
-                    except:
-                        timestamp = datetime.now()
+                    timestamp = datetime.now()
+                    for fmt in ["%m/%d/%Y %I:%M%p %Z", "%Y-%m-%d %H:%M:%S,%f"]:
+                        try:
+                            timestamp = datetime.strptime(timestamp_str, fmt)
+                            break
+                        except ValueError:
+                            continue
 
                     # Parse notification details
-                    # Format: "Notified: Show Title [Key:12345] S1E2 - Episode Title"
                     notif_part = line.split("Notified:")[1].strip()
-
-                    # Extract show title
                     show_title = notif_part.split("[Key:")[0].strip()
-
-                    # Extract show key
                     key_part = notif_part.split("[Key:")[1]
                     show_key = key_part.split("]")[0].strip()
-
-                    # Extract season/episode and title
                     rest = key_part.split("]", 1)[1].strip()
                     season_ep_part = rest.split(" - ")[0].strip()
 
@@ -178,7 +156,6 @@ def _migrate_legacy_notifications(app):
 
                     episode_title = rest.split(" - ", 1)[1].strip() if " - " in rest else ""
 
-                    # Skip if we couldn't parse season/episode
                     if not season or not episode:
                         file_errors += 1
                         continue
@@ -218,6 +195,31 @@ def _migrate_legacy_notifications(app):
     app.logger.info("=" * 80)
     app.logger.info(f"✅ Migration complete: {total_imported} notifications imported, {total_errors} errors")
     app.logger.info("=" * 80)
+
+    # Fix incomplete emails in user_preferences table
+    app.logger.info("🔧 Checking for incomplete emails in user_preferences...")
+    incomplete_prefs = UserPreferences.query.filter(~UserPreferences.email.contains('@')).all()
+    if incomplete_prefs:
+        app.logger.info(f"  Found {len(incomplete_prefs)} user preference(s) with incomplete emails")
+        fixed_count = 0
+        for pref in incomplete_prefs:
+            if pref.email and pref.email in email_map:
+                full_email = email_map[pref.email]
+                app.logger.info(f"  ✓ Updating {pref.email} -> {full_email}")
+                pref.email = full_email
+                fixed_count += 1
+            else:
+                app.logger.warning(f"  ⚠ Cannot fix {pref.email} - no matching email in notifications.log")
+
+        if fixed_count > 0:
+            try:
+                db.session.commit()
+                app.logger.info(f"  ✅ Fixed {fixed_count} incomplete email(s) in user_preferences")
+            except Exception as e:
+                db.session.rollback()
+                app.logger.error(f"  ✗ Failed to update user_preferences: {e}")
+    else:
+        app.logger.info("  ✓ All emails in user_preferences are complete")
 
 
 # 🔐 Auth helpers
@@ -330,7 +332,7 @@ def create_app():
             db.session.commit()
             app.logger.info("Created default settings")
 
-        # Migrate legacy log files to database on first run
+        # Migrate legacy log files to database (prioritizes full emails from notifications.log)
         _migrate_legacy_notifications(app)
 
         interval = s.notify_interval or 30
