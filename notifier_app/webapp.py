@@ -501,5 +501,15 @@ def create_app():
             show_prefs=single_user,
         )
 
+    @app.route('/sw.js')
+    def service_worker():
+        """Serve the service worker file with correct MIME type."""
+        from flask import send_from_directory
+        return send_from_directory(
+            os.path.join(app.root_path, 'static'),
+            'sw.js',
+            mimetype='application/javascript'
+        )
+
     register_debug_route(app)
     return app

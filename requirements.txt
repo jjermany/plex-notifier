@@ -10,3 +10,4 @@ python-dotenv
 email_validator
 gunicorn
 cachetools
+Pillow
