@@ -57,6 +57,25 @@ def _migrate_legacy_notifications(app):
     total_imported = 0
     total_errors = 0
 
+    # First, build a map of local parts to full email addresses by scanning the main log
+    # The main notifications.log contains entries with full email addresses
+    email_map = {}  # Maps local_part -> full_email
+    main_log_path = os.path.join(log_dir, "notifications.log")
+    if os.path.exists(main_log_path):
+        try:
+            with open(main_log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Look for email addresses in the log
+                    import re
+                    email_matches = re.findall(r'\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b', line)
+                    for email in email_matches:
+                        local = email.split('@')[0].lower()
+                        if local not in email_map:
+                            email_map[local] = email.lower()
+            app.logger.info(f"  📧 Built email mapping from notifications.log: {len(email_map)} addresses found")
+        except Exception as e:
+            app.logger.warning(f"  ⚠ Could not parse notifications.log for email mapping: {e}")
+
     for log_file in log_files:
         log_path = os.path.join(log_dir, log_file)
 
@@ -97,11 +116,18 @@ def _migrate_legacy_notifications(app):
                             app.logger.debug(f"    ✓ Matched via old format: {pref_email}")
                             break
 
+            # If still not found, try the email map built from notifications.log
+            if not user_email and filename_base in email_map:
+                user_email = normalize_email(email_map[filename_base])
+                app.logger.debug(f"    ✓ Matched via notifications.log mapping: {user_email}")
+
             # If still not found, we can't import this file
             if not user_email:
                 available_local_parts = [e[0].split("@")[0].lower() if e[0] and "@" in e[0] else str(e[0]).lower() for e in all_users if e[0]]
                 app.logger.warning(f"  ⚠ Could not determine email for {log_file}")
                 app.logger.info(f"     Tried to match '{filename_base}' against local parts: {available_local_parts[:5]}")
+                if email_map:
+                    app.logger.info(f"     Email map has: {list(email_map.keys())[:10]}")
                 continue
 
             app.logger.info(f"  📧 Processing {log_file} for user {user_email}")
