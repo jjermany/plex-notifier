@@ -544,6 +544,32 @@ def create_app():
                 'error': str(e)
             }, 500
 
+    @app.route('/admin/clear-notifications')
+    @requires_auth
+    def admin_clear_notifications():
+        """Admin endpoint to clear all notifications and trigger re-migration."""
+        try:
+            count = Notification.query.count()
+            Notification.query.delete()
+            db.session.commit()
+
+            message = f"""
+            <html>
+            <head><title>Notifications Cleared</title></head>
+            <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
+                <h2>✓ Notifications Table Cleared</h2>
+                <p>Successfully deleted {count} notification records.</p>
+                <p><strong>Next Step:</strong> Restart the Plex Notifier container in Unraid to trigger the legacy migration again.</p>
+                <p>After restart, check the logs to see the diagnostic output showing what filenames and emails are being matched.</p>
+                <p><a href="/" style="color: #007bff;">← Back to Home</a></p>
+            </body>
+            </html>
+            """
+            return message, 200
+        except Exception as e:
+            app.logger.error(f"Failed to clear notifications: {e}")
+            return f"<html><body><h2>Error</h2><p>{str(e)}</p></body></html>", 500
+
     @app.route('/history')
     @requires_auth
     def history():
