@@ -32,6 +32,11 @@
               <i class="bi bi-clock-history"></i> History
             </a>
           </li>
+          <li class="nav-item">
+            <a href="/health" class="nav-link" target="_blank">
+              <i class="bi bi-heart-pulse-fill"></i> Health
+            </a>
+          </li>
         </ul>
       </div>
     </div>
@@ -280,13 +285,31 @@
       </div>
     </form>
 
-    <!-- Run Now (last 24h) -->
-    <div class="mb-4 text-start">
-      <form method="post" action="{{ url_for('run_check') }}" id="runForm">
-        <button type="submit" class="btn btn-warning btn-lg hover-lift" id="runNowBtn">
-          <i class="bi bi-play-fill"></i> Run Now (last 24h)
-        </button>
-      </form>
+    <!-- Manual Check Card -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <i class="bi bi-play-circle-fill"></i> Manual Check
+      </div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('run_check') }}" id="runForm">
+          {{ manual_check_form.hidden_tag() }}
+          <div class="mb-3">
+            {{ manual_check_form.time_window.label(class="form-label text-white") }}
+            <div class="input-group">
+              <span class="input-group-text bg-dark border-secondary">
+                <i class="bi bi-calendar-range"></i>
+              </span>
+              {{ manual_check_form.time_window(class="form-select") }}
+            </div>
+            <div class="form-text text-light">
+              <i class="bi bi-info-circle"></i> Select how far back to check for new episodes
+            </div>
+          </div>
+          <button type="submit" class="btn btn-warning btn-lg hover-lift" id="runNowBtn">
+            <i class="bi bi-play-fill"></i> Run Manual Check
+          </button>
+        </form>
+      </div>
     </div>
 
     <!-- Test Email Card -->
