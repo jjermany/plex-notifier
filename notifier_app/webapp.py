@@ -77,9 +77,13 @@ def _migrate_legacy_notifications(app):
 
             # First, try exact match with new filename format
             all_users = UserPreferences.query.with_entities(UserPreferences.email).distinct().all()
+
+            app.logger.debug(f"  🔍 Matching '{filename_base}' against {len(all_users)} users")
+
             for (pref_email,) in all_users:
                 if pref_email and email_to_filename(pref_email) == filename_base:
                     user_email = normalize_email(pref_email)
+                    app.logger.debug(f"    ✓ Matched via new format: {pref_email}")
                     break
 
             # If not found, try old format (just local part before @)
@@ -87,13 +91,17 @@ def _migrate_legacy_notifications(app):
                 for (pref_email,) in all_users:
                     if pref_email:
                         local_part = pref_email.split("@")[0].lower()
+                        app.logger.debug(f"    Comparing local_part '{local_part}' with filename_base '{filename_base}'")
                         if local_part == filename_base:
                             user_email = normalize_email(pref_email)
+                            app.logger.debug(f"    ✓ Matched via old format: {pref_email}")
                             break
 
             # If still not found, we can't import this file
             if not user_email:
-                app.logger.warning(f"  ⚠ Could not determine email for {log_file}, skipping file")
+                available_local_parts = [e[0].split("@")[0].lower() if e[0] and "@" in e[0] else str(e[0]).lower() for e in all_users if e[0]]
+                app.logger.warning(f"  ⚠ Could not determine email for {log_file}")
+                app.logger.info(f"     Tried to match '{filename_base}' against local parts: {available_local_parts[:5]}")
                 continue
 
             app.logger.info(f"  📧 Processing {log_file} for user {user_email}")
