@@ -208,6 +208,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             if not user_email or user_email == s.from_address:
                 continue
 
+            # Validate email has domain
+            if '@' not in user_email:
+                current_app.logger.warning(f"⚠️ Skipping user with incomplete email: {user_email}")
+                continue
+
             canon = normalize_email(user_email)
 
             # 🔒 Check global opt-out

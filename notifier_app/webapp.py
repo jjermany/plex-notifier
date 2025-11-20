@@ -196,6 +196,31 @@ def _migrate_legacy_notifications(app):
     app.logger.info(f"✅ Migration complete: {total_imported} notifications imported, {total_errors} errors")
     app.logger.info("=" * 80)
 
+    # Fix incomplete emails in user_preferences table
+    app.logger.info("🔧 Checking for incomplete emails in user_preferences...")
+    incomplete_prefs = UserPreferences.query.filter(~UserPreferences.email.contains('@')).all()
+    if incomplete_prefs:
+        app.logger.info(f"  Found {len(incomplete_prefs)} user preference(s) with incomplete emails")
+        fixed_count = 0
+        for pref in incomplete_prefs:
+            if pref.email and pref.email in email_map:
+                full_email = email_map[pref.email]
+                app.logger.info(f"  ✓ Updating {pref.email} -> {full_email}")
+                pref.email = full_email
+                fixed_count += 1
+            else:
+                app.logger.warning(f"  ⚠ Cannot fix {pref.email} - no matching email in notifications.log")
+
+        if fixed_count > 0:
+            try:
+                db.session.commit()
+                app.logger.info(f"  ✅ Fixed {fixed_count} incomplete email(s) in user_preferences")
+            except Exception as e:
+                db.session.rollback()
+                app.logger.error(f"  ✗ Failed to update user_preferences: {e}")
+    else:
+        app.logger.info("  ✓ All emails in user_preferences are complete")
+
 
 # 🔐 Auth helpers
 def check_auth(username, password):
