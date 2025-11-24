@@ -400,26 +400,17 @@ function initSubscriptionsPage() {
     });
   }
 
-  // Add search/filter for shows
-  const showList = document.querySelector('.show-checkbox-list');
-  if (showList && showCheckboxes.length > 10) {
-    // Create search input
-    const searchContainer = document.createElement('div');
-    searchContainer.className = 'mb-3';
-    searchContainer.innerHTML = `
-      <input type="text"
-             class="form-control"
-             id="showSearch"
-             placeholder="Search shows..."
-             aria-label="Search shows">
-    `;
+  // Add search functionality for shows on current page
+  const showSearch = document.getElementById('showSearch');
+  const clearSearch = document.getElementById('clearSearch');
+  if (showSearch && clearSearch) {
+    showSearch.addEventListener('input', function() {
+      const searchTerm = this.value.toLowerCase().trim();
 
-    showList.parentElement.insertBefore(searchContainer, showList);
+      // Show/hide clear button
+      clearSearch.style.display = searchTerm ? 'block' : 'none';
 
-    const searchInput = document.getElementById('showSearch');
-    searchInput.addEventListener('input', function() {
-      const searchTerm = this.value.toLowerCase();
-
+      // Filter shows
       showCheckboxes.forEach(checkbox => {
         const label = checkbox.nextElementSibling;
         const showName = label.textContent.toLowerCase();
@@ -432,18 +423,25 @@ function initSubscriptionsPage() {
         }
       });
     });
+
+    // Clear search button
+    clearSearch.addEventListener('click', function() {
+      showSearch.value = '';
+      showSearch.dispatchEvent(new Event('input'));
+      showSearch.focus();
+    });
   }
 
-  // Add select all / deselect all buttons
+  // Add select all / deselect all buttons for current page
   if (showCheckboxes.length > 5) {
     const buttonContainer = document.createElement('div');
     buttonContainer.className = 'mb-3 d-flex gap-2';
     buttonContainer.innerHTML = `
       <button type="button" class="btn btn-sm btn-outline-secondary" id="selectAllShows">
-        Select All
+        Select All on Page
       </button>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAllShows">
-        Deselect All
+        Deselect All on Page
       </button>
     `;
 

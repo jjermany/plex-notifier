@@ -9,6 +9,10 @@ DEFAULT_HISTORY_LIMIT = 500  # Increased from 100 for better visibility
 HISTORY_ENTRIES_PER_PAGE = 20
 MONTHLY_STATS_MONTHS = 12  # Number of months to show in stats
 
+# Subscriptions page
+SUBSCRIPTIONS_SHOWS_PER_PAGE = 25  # Number of shows per page on subscriptions page
+INACTIVE_SHOW_THRESHOLD_DAYS = 365  # Days without notifications before a show is considered inactive
+
 # Manual check defaults
 DEFAULT_MANUAL_CHECK_HOURS = 24  # Default lookback window for manual checks
 
