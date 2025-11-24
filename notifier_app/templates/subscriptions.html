@@ -115,40 +115,37 @@
             {% if shows or search_query %}
               <!-- Search Box -->
               <div class="mb-3" id="showSearchContainer">
-                <form method="GET" action="{{ url_for('subscriptions') }}" id="searchForm">
-                  <input type="hidden" name="token" value="{{ token }}">
-                  <input type="hidden" name="show_inactive" value="{{ 'true' if show_inactive else 'false' }}">
-                  <div class="input-group">
-                    <span class="input-group-text bg-dark border-secondary">
-                      <i class="bi bi-search"></i>
-                    </span>
-                    <input type="text"
-                           class="form-control"
-                           id="showSearch"
-                           name="search"
-                           value="{{ search_query or '' }}"
-                           placeholder="Search all shows..."
-                           aria-label="Search shows">
-                    {% if search_query %}
-                    <a href="{{ url_for('subscriptions', token=token, show_inactive='true' if show_inactive else 'false') }}"
-                       class="btn btn-outline-secondary" id="clearSearch">
-                      <i class="bi bi-x-lg"></i>
-                    </a>
-                    {% endif %}
-                    <button class="btn btn-primary" type="submit">
-                      <i class="bi bi-search"></i>
-                    </button>
-                  </div>
+                <div class="input-group">
+                  <span class="input-group-text bg-dark border-secondary">
+                    <i class="bi bi-search"></i>
+                  </span>
+                  <input type="text"
+                         class="form-control"
+                         id="showSearch"
+                         data-token="{{ token }}"
+                         data-show-inactive="{{ 'true' if show_inactive else 'false' }}"
+                         value="{{ search_query or '' }}"
+                         placeholder="Search all shows..."
+                         aria-label="Search shows">
                   {% if search_query %}
-                  <small class="text-muted">
-                    <i class="bi bi-funnel-fill"></i> Filtering by: <strong>{{ search_query }}</strong> ({{ shows|length }} result{{ 's' if shows|length != 1 else '' }})
-                  </small>
-                  {% else %}
-                  <small class="text-muted">
-                    <i class="bi bi-info-circle"></i> Search across all subscribed shows
-                  </small>
+                  <a href="{{ url_for('subscriptions', token=token, show_inactive='true' if show_inactive else 'false') }}"
+                     class="btn btn-outline-secondary" id="clearSearch">
+                    <i class="bi bi-x-lg"></i>
+                  </a>
                   {% endif %}
-                </form>
+                  <button class="btn btn-primary" type="button" id="searchButton">
+                    <i class="bi bi-search"></i>
+                  </button>
+                </div>
+                {% if search_query %}
+                <small class="text-muted">
+                  <i class="bi bi-funnel-fill"></i> Filtering by: <strong>{{ search_query }}</strong> ({{ shows|length }} result{{ 's' if shows|length != 1 else '' }})
+                </small>
+                {% else %}
+                <small class="text-muted">
+                  <i class="bi bi-info-circle"></i> Search across all subscribed shows
+                </small>
+                {% endif %}
               </div>
               {% endif %}
               {% if shows %}
