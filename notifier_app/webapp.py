@@ -137,7 +137,7 @@ def create_app():
         app.config['scheduler'] = sched
         app.logger.info("✅ App initialized successfully.")
 
-    @app.route('/', methods=['GET', 'POST'])
+    @app.route('/settings', methods=['GET', 'POST'])
     @requires_auth
     def settings():
         s = Settings.query.first() or Settings(notify_interval=30)
@@ -369,7 +369,7 @@ def create_app():
                 'error': str(e)
             }, 500
 
-    @app.route('/history')
+    @app.route('/')
     @requires_auth
     def history():
         tz = ZoneInfo(os.environ.get("TZ")) if os.environ.get("TZ") else None
