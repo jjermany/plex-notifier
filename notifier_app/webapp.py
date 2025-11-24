@@ -282,6 +282,7 @@ def create_app():
         page = max(int(request.args.get('page', 1)), 1)
         per_page = SUBSCRIPTIONS_SHOWS_PER_PAGE
         show_inactive = request.args.get('show_inactive', 'false').lower() == 'true'
+        search_query = request.args.get('search', '').strip()
 
         user_prefs = UserPreferences.query.filter(
             UserPreferences.email.in_([canon, email])
@@ -360,6 +361,13 @@ def create_app():
         # Sort by most recent notification date (descending), shows without dates at the end
         shows_list.sort(key=lambda x: x['last_notified'] if x['last_notified'] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
+        # Apply search filter if provided
+        if search_query:
+            shows_list = [
+                show for show in shows_list
+                if search_query.lower() in show['title'].lower()
+            ]
+
         # Calculate pagination
         total_shows = len(shows_list)
         total_pages = max((total_shows - 1) // per_page + 1, 1) if total_shows > 0 else 1
@@ -391,6 +399,7 @@ def create_app():
             total_pages=total_pages,
             show_inactive=show_inactive,
             inactive_count=inactive_count,
+            search_query=search_query,
         )
 
     @app.route('/health')
