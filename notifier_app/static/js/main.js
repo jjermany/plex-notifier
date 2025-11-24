@@ -400,37 +400,8 @@ function initSubscriptionsPage() {
     });
   }
 
-  // Add search functionality for shows on current page
-  const showSearch = document.getElementById('showSearch');
-  const clearSearch = document.getElementById('clearSearch');
-  if (showSearch && clearSearch) {
-    showSearch.addEventListener('input', function() {
-      const searchTerm = this.value.toLowerCase().trim();
-
-      // Show/hide clear button
-      clearSearch.style.display = searchTerm ? 'block' : 'none';
-
-      // Filter shows
-      showCheckboxes.forEach(checkbox => {
-        const label = checkbox.nextElementSibling;
-        const showName = label.textContent.toLowerCase();
-        const formCheck = checkbox.parentElement;
-
-        if (showName.includes(searchTerm)) {
-          formCheck.style.display = '';
-        } else {
-          formCheck.style.display = 'none';
-        }
-      });
-    });
-
-    // Clear search button
-    clearSearch.addEventListener('click', function() {
-      showSearch.value = '';
-      showSearch.dispatchEvent(new Event('input'));
-      showSearch.focus();
-    });
-  }
+  // Server-side search is now handled via form submission
+  // No client-side filtering needed
 
   // Add select all / deselect all buttons for current page
   if (showCheckboxes.length > 5) {
