@@ -34,6 +34,22 @@
       mso-table-rspace: 0pt;
     }
 
+    /* Color Palette - Semantic naming
+     * Primary Background: #1a1a1a (main background)
+     * Secondary Background: #212529 (card background)
+     * Accent Color: #e5a00d (gold/yellow)
+     * Primary Text: #ffffff (headings)
+     * Secondary Text: #cccccc (body text)
+     * Muted Text: #999999 (supporting text)
+     * Border Color: rgba(255, 255, 255, 0.1)
+     */
+
+    /* Link styling */
+    a {
+      color: #e5a00d;
+      text-decoration: none;
+    }
+
     /* Mobile responsive styles */
     @media only screen and (max-width: 600px) {
       .email-container {
@@ -47,23 +63,54 @@
         max-width: 100% !important;
       }
 
+      .poster-column {
+        padding-bottom: 16px !important;
+        padding-right: 0 !important;
+      }
+
       .poster-column img {
         width: 100% !important;
-        max-width: 180px !important;
+        max-width: 160px !important;
         height: auto !important;
         margin: 0 auto !important;
       }
 
       .header-logo {
-        height: 48px !important;
+        height: 40px !important;
       }
 
       .mobile-padding {
-        padding: 15px !important;
+        padding: 16px !important;
       }
 
       .mobile-text-center {
         text-align: center !important;
+      }
+
+      /* Mobile font scaling */
+      .mobile-h1 {
+        font-size: 24px !important;
+      }
+
+      .mobile-h2 {
+        font-size: 20px !important;
+      }
+
+      .mobile-h3 {
+        font-size: 15px !important;
+      }
+
+      .mobile-body {
+        font-size: 14px !important;
+      }
+
+      /* Mobile spacing adjustments */
+      .mobile-spacing-sm {
+        padding: 8px !important;
+      }
+
+      .mobile-spacing-md {
+        padding: 16px !important;
       }
     }
   </style>
@@ -71,22 +118,23 @@
 <body style="margin:0; padding:0; background-color:#1a1a1a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
   <!-- Preheader text -->
   <div style="display:none; font-size:1px; color:#1a1a1a; line-height:1px; max-height:0px; max-width:0px; opacity:0; overflow:hidden;">
-    New episodes are available to watch on Plex! Check out what's new.
+    {% set total_episodes = grouped_episodes.values() | map(attribute='episodes') | map('length') | sum %}
+    {{ total_episodes }} new episode{% if total_episodes != 1 %}s{% endif %} available{% if grouped_episodes | length <= 3 %}: {{ grouped_episodes.keys() | list | join(', ') }}{% endif %}
   </div>
 
   <!-- Main wrapper -->
   <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background-color:#1a1a1a;">
     <tr>
-      <td align="center" style="padding:20px 10px;">
+      <td align="center" style="padding:24px 10px;">
 
         <!-- Email container -->
         <table class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" role="presentation" style="max-width:600px; width:100%;">
 
           <!-- Header -->
           <tr>
-            <td align="center" style="padding:30px 20px 20px;">
+            <td align="center" style="padding:32px 24px 24px;">
               <img src="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png"
-                   alt="Plex Notifier"
+                   alt="Plex Notifier Logo"
                    class="header-logo"
                    style="height:64px; width:auto; display:block;" />
             </td>
@@ -94,11 +142,11 @@
 
           <!-- Title -->
           <tr>
-            <td align="center" style="padding:0 20px 30px;">
-              <h1 style="margin:0; font-size:28px; font-weight:600; color:#ffffff; line-height:1.3;">
-                🎬 New Episodes Available
+            <td align="center" style="padding:0 24px 32px;">
+              <h1 class="mobile-h1" style="margin:0; font-size:32px; font-weight:700; color:#ffffff; line-height:1.2; letter-spacing:-0.5px;">
+                New Episodes Available
               </h1>
-              <p style="margin:10px 0 0; font-size:16px; color:#aaaaaa; line-height:1.5;">
+              <p class="mobile-body" style="margin:16px 0 0; font-size:16px; color:#cccccc; line-height:1.5;">
                 Fresh content is waiting for you on Plex
               </p>
             </td>
@@ -107,51 +155,50 @@
           <!-- Shows Loop -->
           {% for show_title, show in grouped_episodes.items() %}
           <tr>
-            <td style="padding:0 10px 20px;">
+            <td style="padding:0 16px 24px;">
               <!-- Show Card -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
-                     style="background: linear-gradient(135deg, rgba(33, 37, 41, 0.95) 0%, rgba(40, 44, 48, 0.95) 100%);
+                     style="background: linear-gradient(135deg, #212529 0%, #2a2e32 100%);
                             border-radius:12px;
                             border:1px solid rgba(255, 255, 255, 0.1);
                             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);">
                 <tr>
-                  <td class="mobile-padding" style="padding:20px;">
+                  <td class="mobile-padding" style="padding:24px;">
 
                     <!-- Show Header with Poster and Title -->
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
                       <tr>
-                        <td width="140" valign="top" class="poster-column" style="padding-right:20px;">
+                        <td width="120" valign="top" class="poster-column" style="padding-right:20px;">
+                          {% set preferred_link = show.show_mobile_link or show.show_link %}
+                          {% if preferred_link %}
+                          <a href="{{ preferred_link }}" style="display:block;">
+                            <img src="{{ show.show_poster_ref }}"
+                                 alt="Poster for {{ show_title }}"
+                                 style="width:100%; max-width:120px; height:auto; border-radius:8px; display:block;
+                                        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);" />
+                          </a>
+                          {% else %}
                           <img src="{{ show.show_poster_ref }}"
-                               alt="{{ show_title }} Poster"
-                               style="width:100%; max-width:140px; height:auto; border-radius:8px; display:block;
+                               alt="Poster for {{ show_title }}"
+                               style="width:100%; max-width:120px; height:auto; border-radius:8px; display:block;
                                       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);" />
+                          {% endif %}
                         </td>
                         <td valign="top" class="content-column mobile-text-center">
-                          <h2 style="margin:0 0 8px; font-size:24px; font-weight:600; line-height:1.3;">
-                            {% if show.show_mobile_link %}
-                            <a href="{{ show.show_mobile_link }}"
+                          <h2 class="mobile-h2" style="margin:0 0 8px; font-size:26px; font-weight:700; line-height:1.2; letter-spacing:-0.5px;">
+                            {% set preferred_link = show.show_mobile_link or show.show_link %}
+                            {% if preferred_link %}
+                            <a href="{{ preferred_link }}"
                                style="color:#e5a00d;
                                       text-decoration:none;
-                                      font-weight:600;">
-                              {{ show_title }}
-                            </a>
-                            {% elif show.show_link %}
-                            <a href="{{ show.show_link }}"
-                               style="color:#e5a00d;
-                                      text-decoration:none;
-                                      font-weight:600;">
+                                      font-weight:700;">
                               {{ show_title }}
                             </a>
                             {% else %}
                             <span style="color:#e5a00d;">{{ show_title }}</span>
                             {% endif %}
                           </h2>
-                          {% if show.show_link and show.show_mobile_link %}
-                          <p style="margin:0 0 8px; font-size:12px; color:#888888; line-height:1.5;">
-                            <a href="{{ show.show_link }}" style="color:#888888; text-decoration:underline;">Open in Web Player</a>
-                          </p>
-                          {% endif %}
-                          <p style="margin:0; font-size:14px; color:#aaaaaa; line-height:1.5;">
+                          <p style="margin:0; font-size:15px; color:#999999; line-height:1.5; font-weight:500;">
                             {{ show.episodes|length }} new episode{% if show.episodes|length != 1 %}s{% endif %}
                           </p>
                         </td>
@@ -159,44 +206,47 @@
                     </table>
 
                     <!-- Episodes List -->
-                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:24px;">
                       {% for ep in show.episodes %}
                       <tr>
-                        <td style="padding:{% if not loop.first %}12px{% else %}0{% endif %} 0 0;">
+                        <td style="padding:{% if not loop.first %}16px{% else %}0{% endif %} 0 0;">
                           <!-- Episode Card -->
                           <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
-                                 style="background-color:rgba(0, 0, 0, 0.3);
+                                 style="background-color:rgba(0, 0, 0, 0.25);
                                         border-radius:8px;
-                                        border-left:3px solid #e5a00d;
+                                        border-left:4px solid #e5a00d;
+                                        border-top:1px solid rgba(255, 255, 255, 0.05);
                                         box-shadow:0 2px 8px rgba(0, 0, 0, 0.2);">
                             <tr>
-                              <td width="120" valign="top" class="poster-column" style="padding:12px;">
+                              <td width="110" valign="top" class="poster-column mobile-spacing-sm" style="padding:16px;">
+                                {% set preferred_ep_link = ep.episode_mobile_link or ep.episode_link %}
+                                {% if preferred_ep_link %}
+                                <a href="{{ preferred_ep_link }}" style="display:block;">
+                                  <img src="{{ ep.episode_poster_ref }}"
+                                       alt="Episode thumbnail for {{ show_title }} Season {{ ep.season }} Episode {{ ep.episode }}: {{ ep.ep_title }}"
+                                       style="width:100%; max-width:110px; height:auto; border-radius:6px; display:block;" />
+                                </a>
+                                {% else %}
                                 <img src="{{ ep.episode_poster_ref }}"
-                                     alt="Episode {{ ep.episode }}"
-                                     style="width:100%; max-width:120px; height:auto; border-radius:6px; display:block;" />
+                                     alt="Episode thumbnail for {{ show_title }} Season {{ ep.season }} Episode {{ ep.episode }}: {{ ep.ep_title }}"
+                                     style="width:100%; max-width:110px; height:auto; border-radius:6px; display:block;" />
+                                {% endif %}
                               </td>
-                              <td valign="top" class="content-column" style="padding:12px 12px 12px 0;">
-                                <h3 style="margin:0 0 4px; font-size:16px; font-weight:600; line-height:1.4;">
-                                  {% if ep.episode_mobile_link %}
-                                  <a href="{{ ep.episode_mobile_link }}"
+                              <td valign="top" class="content-column mobile-spacing-sm" style="padding:16px 16px 16px 0;">
+                                <h3 class="mobile-h3" style="margin:0 0 8px; font-size:17px; font-weight:600; line-height:1.3;">
+                                  {% set preferred_ep_link = ep.episode_mobile_link or ep.episode_link %}
+                                  {% if preferred_ep_link %}
+                                  <a href="{{ preferred_ep_link }}"
                                      style="color:#ffffff; text-decoration:none; display:block;">
-                                    <span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}
-                                  </a>
-                                  {% elif ep.episode_link %}
-                                  <a href="{{ ep.episode_link }}"
-                                     style="color:#ffffff; text-decoration:none; display:block;">
-                                    <span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}
+                                    <span style="color:#e5a00d; font-weight:700;">S{{ '%02d' | format(ep.season) }}E{{ '%02d' | format(ep.episode) }}</span>
+                                    <span style="color:#ffffff;"> - {{ ep.ep_title }}</span>
                                   </a>
                                   {% else %}
-                                  <span style="color:#ffffff;"><span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}</span>
+                                  <span style="color:#e5a00d; font-weight:700;">S{{ '%02d' | format(ep.season) }}E{{ '%02d' | format(ep.episode) }}</span>
+                                  <span style="color:#ffffff;"> - {{ ep.ep_title }}</span>
                                   {% endif %}
                                 </h3>
-                                {% if ep.episode_link and ep.episode_mobile_link %}
-                                <p style="margin:0 0 8px; font-size:11px; color:#888888; line-height:1.4;">
-                                  <a href="{{ ep.episode_link }}" style="color:#888888; text-decoration:underline;">Web Player</a>
-                                </p>
-                                {% endif %}
-                                <p style="margin:0; font-size:14px; color:#cccccc; line-height:1.5;">
+                                <p class="mobile-body" style="margin:0; font-size:14px; color:#cccccc; line-height:1.5;">
                                   {{ ep.synopsis }}
                                 </p>
                               </td>
@@ -216,10 +266,10 @@
 
           <!-- Divider -->
           <tr>
-            <td style="padding:20px 40px;">
+            <td style="padding:24px 40px;">
               <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
-                  <td style="border-top:2px solid rgba(229, 160, 13, 0.3);"></td>
+                  <td style="border-top:1px solid rgba(229, 160, 13, 0.2);"></td>
                 </tr>
               </table>
             </td>
@@ -227,35 +277,42 @@
 
           <!-- Footer / Preferences -->
           <tr>
-            <td align="center" style="padding:20px 20px 40px;">
+            <td align="center" style="padding:24px 24px 40px;">
               <table cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
-                  <td align="center" style="padding-bottom:15px;">
-                    <p style="margin:0; font-size:14px; color:#888888; line-height:1.5;">
-                      🔔 Not interested in these updates?
+                  <td align="center" style="padding-bottom:16px;">
+                    <p style="margin:0; font-size:15px; color:#999999; line-height:1.5;">
+                      Not interested in these updates?
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td align="center">
-                    <a href="{{ base_url }}/subscriptions?token={{ token }}"
-                       style="display:inline-block;
-                              padding:14px 28px;
-                              background: linear-gradient(135deg, #e5a00d 0%, #f39c12 100%);
-                              color:#000000;
-                              text-decoration:none;
-                              font-weight:600;
-                              font-size:15px;
-                              border-radius:8px;
-                              box-shadow: 0 4px 12px rgba(229, 160, 13, 0.3);">
-                      ⚙️ Manage Notification Preferences
-                    </a>
+                    <!-- Button with better fallback for email clients -->
+                    <table cellpadding="0" cellspacing="0" border="0" role="presentation">
+                      <tr>
+                        <td align="center" style="border-radius:8px; background-color:#e5a00d;">
+                          <a href="{{ base_url }}/subscriptions?token={{ token }}"
+                             style="display:inline-block;
+                                    padding:16px 32px;
+                                    background-color:#e5a00d;
+                                    color:#000000;
+                                    text-decoration:none;
+                                    font-weight:600;
+                                    font-size:15px;
+                                    border-radius:8px;
+                                    line-height:1;">
+                            Manage Notification Preferences
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
                 <tr>
-                  <td align="center" style="padding-top:20px;">
-                    <p style="margin:0; font-size:12px; color:#666666; line-height:1.5;">
-                      🔒 Your privacy matters. Preferences are stored securely.
+                  <td align="center" style="padding-top:24px;">
+                    <p style="margin:0; font-size:13px; color:#999999; line-height:1.5;">
+                      Your privacy matters. Preferences are stored securely.
                     </p>
                   </td>
                 </tr>
@@ -265,8 +322,8 @@
 
           <!-- Footer branding -->
           <tr>
-            <td align="center" style="padding:0 20px 30px;">
-              <p style="margin:0; font-size:12px; color:#555555; line-height:1.5;">
+            <td align="center" style="padding:0 24px 32px;">
+              <p style="margin:0; font-size:13px; color:#666666; line-height:1.5;">
                 Powered by <strong style="color:#e5a00d;">Plex Notifier</strong>
               </p>
             </td>
