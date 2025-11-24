@@ -469,12 +469,10 @@ def create_app():
             user_counts[u] = count
         user_counts = dict(sorted(user_counts.items()))
 
-        # Get search/filter parameters
-        search_raw = request.args.get('search')
-        search_term = normalize_email(search_raw) if search_raw else None
+        # Get filter parameters
         selected_raw = request.args.get('email')
         selected = normalize_email(selected_raw) if selected_raw else None
-        query = search_term or selected
+        query = selected
         page = max(int(request.args.get('page', 1)), 1)
         per_page = HISTORY_ENTRIES_PER_PAGE
 
@@ -514,6 +512,10 @@ def create_app():
         global_opt_out = False
         opted_out = []
         single_user = False
+        subscription_token = None
+        prev_user = None
+        next_user = None
+
         if query:
             matched_users = [u for u in users if query in normalize_email(u)]
             if len(matched_users) == 1:
@@ -530,6 +532,21 @@ def create_app():
                         show_map[n.show_key] = n.show_title
 
                 opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
+
+                # Generate subscription token for this user
+                subscription_token = serializer.dumps(u, salt="unsubscribe")
+
+                # Calculate prev/next users for navigation
+                if users:
+                    user_list = list(users)
+                    try:
+                        current_idx = user_list.index(u)
+                        if current_idx > 0:
+                            prev_user = user_list[current_idx - 1]
+                        if current_idx < len(user_list) - 1:
+                            next_user = user_list[current_idx + 1]
+                    except ValueError:
+                        pass
 
         # Calculate monthly stats from database
         today = datetime.now()
@@ -551,7 +568,6 @@ def create_app():
         return render_template(
             'history.html',
             email=query,
-            search_term=search_raw,
             selected=selected_raw,
             entries=entries,
             global_opt_out=global_opt_out,
@@ -562,6 +578,9 @@ def create_app():
             page=page,
             total_pages=total_pages,
             show_prefs=single_user,
+            subscription_token=subscription_token,
+            prev_user=prev_user,
+            next_user=next_user,
         )
 
     register_debug_route(app)
