@@ -127,14 +127,30 @@
                                       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);" />
                         </td>
                         <td valign="top" class="content-column mobile-text-center">
-                          <h2 style="margin:0 0 15px; font-size:24px; font-weight:600; line-height:1.3;">
-                            <a href="{{ show.show_link or '#' }}"
+                          <h2 style="margin:0 0 8px; font-size:24px; font-weight:600; line-height:1.3;">
+                            {% if show.show_mobile_link %}
+                            <a href="{{ show.show_mobile_link }}"
                                style="color:#e5a00d;
                                       text-decoration:none;
                                       font-weight:600;">
                               {{ show_title }}
                             </a>
+                            {% elif show.show_link %}
+                            <a href="{{ show.show_link }}"
+                               style="color:#e5a00d;
+                                      text-decoration:none;
+                                      font-weight:600;">
+                              {{ show_title }}
+                            </a>
+                            {% else %}
+                            <span style="color:#e5a00d;">{{ show_title }}</span>
+                            {% endif %}
                           </h2>
+                          {% if show.show_link and show.show_mobile_link %}
+                          <p style="margin:0 0 8px; font-size:12px; color:#888888; line-height:1.5;">
+                            <a href="{{ show.show_link }}" style="color:#888888; text-decoration:underline;">Open in Web Player</a>
+                          </p>
+                          {% endif %}
                           <p style="margin:0; font-size:14px; color:#aaaaaa; line-height:1.5;">
                             {{ show.episodes|length }} new episode{% if show.episodes|length != 1 %}s{% endif %}
                           </p>
@@ -160,12 +176,26 @@
                                      style="width:100%; max-width:120px; height:auto; border-radius:6px; display:block;" />
                               </td>
                               <td valign="top" class="content-column" style="padding:12px 12px 12px 0;">
-                                <h3 style="margin:0 0 8px; font-size:16px; font-weight:600; line-height:1.4;">
-                                  <a href="{{ ep.episode_link or '#' }}"
+                                <h3 style="margin:0 0 4px; font-size:16px; font-weight:600; line-height:1.4;">
+                                  {% if ep.episode_mobile_link %}
+                                  <a href="{{ ep.episode_mobile_link }}"
                                      style="color:#ffffff; text-decoration:none; display:block;">
                                     <span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}
                                   </a>
+                                  {% elif ep.episode_link %}
+                                  <a href="{{ ep.episode_link }}"
+                                     style="color:#ffffff; text-decoration:none; display:block;">
+                                    <span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}
+                                  </a>
+                                  {% else %}
+                                  <span style="color:#ffffff;"><span style="color:#e5a00d; font-weight:700;">S{{ ep.season }}E{{ ep.episode }}</span> - {{ ep.ep_title }}</span>
+                                  {% endif %}
                                 </h3>
+                                {% if ep.episode_link and ep.episode_mobile_link %}
+                                <p style="margin:0 0 8px; font-size:11px; color:#888888; line-height:1.4;">
+                                  <a href="{{ ep.episode_link }}" style="color:#888888; text-decoration:underline;">Web Player</a>
+                                </p>
+                                {% endif %}
                                 <p style="margin:0; font-size:14px; color:#cccccc; line-height:1.5;">
                                   {{ ep.synopsis }}
                                 </p>

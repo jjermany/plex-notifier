@@ -276,8 +276,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
         fallback_url = "https://raw.githubusercontent.com/jjermany/plex-notifier/main/media/no-poster-dark.jpg"
 
         plex_app_base = None
+        plex_mobile_base = None
         if machine_id:
             plex_app_base = f"https://app.plex.tv/desktop#!/server/{machine_id}/details?key="
+            plex_mobile_base = f"plex://server/{machine_id}/details?key="
 
         for email, eps in user_eps.items():
             msg = MIMEMultipart('alternative')
@@ -291,19 +293,24 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             for idx, ep in enumerate(eps, start=1):
                 show_title = ep.grandparentTitle
                 show_link = None
+                show_mobile_link = None
                 show_key = ep.grandparentRatingKey
                 if plex_app_base and show_key:
                     show_link = f"{plex_app_base}{quote('/library/metadata/' + str(show_key))}"
+                if plex_mobile_base and show_key:
+                    show_mobile_link = f"{plex_mobile_base}{quote('/library/metadata/' + str(show_key))}"
 
                 if show_title not in grouped:
                     grouped[show_title] = {
                         'show_title': show_title,
                         'show_poster_ref': fallback_url,
                         'show_link': show_link,
+                        'show_mobile_link': show_mobile_link,
                         'episodes': [],
                     }
                 elif not grouped[show_title]['show_link'] and show_link:
                     grouped[show_title]['show_link'] = show_link
+                    grouped[show_title]['show_mobile_link'] = show_mobile_link
 
                 if show_title not in images_attached:
                     show_poster_url = f"{s.plex_url.rstrip('/')}{ep.grandparentThumb}?X-Plex-Token={s.plex_token}" if ep.grandparentThumb else fallback_url
@@ -335,8 +342,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     episode_ref = fallback_url
 
                 episode_link = None
+                episode_mobile_link = None
                 if plex_app_base and ep.ratingKey:
                     episode_link = f"{plex_app_base}{quote('/library/metadata/' + str(ep.ratingKey))}"
+                if plex_mobile_base and ep.ratingKey:
+                    episode_mobile_link = f"{plex_mobile_base}{quote('/library/metadata/' + str(ep.ratingKey))}"
 
                 grouped[show_title]['episodes'].append({
                     'show_title': ep.grandparentTitle,
@@ -346,6 +356,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     'synopsis': ep.summary or 'No synopsis available.',
                     'episode_poster_ref': episode_ref,
                     'episode_link': episode_link,
+                    'episode_mobile_link': episode_mobile_link,
                 })
 
             token = serializer.dumps(email, salt="unsubscribe")
@@ -357,14 +368,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             )
             plain_lines = []
             for show in grouped.values():
-                if show['show_link']:
-                    plain_lines.append(f"{show['show_title']} - {show['show_link']}")
+                # Prefer mobile link, fallback to web link
+                link = show.get('show_mobile_link') or show.get('show_link')
+                if link:
+                    plain_lines.append(f"{show['show_title']} - {link}")
                 else:
                     plain_lines.append(f"{show['show_title']}")
                 for ep in show['episodes']:
                     episode_line = f"  S{ep['season']:02}E{ep['episode']:02} - {ep['ep_title']}"
-                    if ep['episode_link']:
-                        episode_line = f"{episode_line} ({ep['episode_link']})"
+                    # Prefer mobile link, fallback to web link
+                    ep_link = ep.get('episode_mobile_link') or ep.get('episode_link')
+                    if ep_link:
+                        episode_line = f"{episode_line} ({ep_link})"
                     plain_lines.append(episode_line)
             plain_body = "\n".join(plain_lines)
 
