@@ -357,8 +357,8 @@ def create_app():
                 'last_notified': info['last_notified']
             })
 
-        # Sort alphabetically
-        shows_list.sort(key=lambda x: x['title'])
+        # Sort by most recent notification date (descending), shows without dates at the end
+        shows_list.sort(key=lambda x: x['last_notified'] if x['last_notified'] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
         # Calculate pagination
         total_shows = len(shows_list)

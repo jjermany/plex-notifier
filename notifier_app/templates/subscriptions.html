@@ -113,6 +113,27 @@
             {% endif %}
 
             {% if shows %}
+              <!-- Search Box -->
+              {% if shows|length > 5 %}
+              <div class="mb-3" id="showSearchContainer">
+                <div class="input-group">
+                  <span class="input-group-text bg-dark border-secondary">
+                    <i class="bi bi-search"></i>
+                  </span>
+                  <input type="text"
+                         class="form-control"
+                         id="showSearch"
+                         placeholder="Search shows on this page..."
+                         aria-label="Search shows">
+                  <button class="btn btn-outline-secondary" type="button" id="clearSearch" style="display: none;">
+                    <i class="bi bi-x-lg"></i>
+                  </button>
+                </div>
+                <small class="text-muted">
+                  <i class="bi bi-info-circle"></i> Searching current page only ({{ shows|length }} show{{ 's' if shows|length != 1 else '' }})
+                </small>
+              </div>
+              {% endif %}
               <div class="show-checkbox-list">
                 {% for show in shows %}
                   <div class="form-check mb-2">
