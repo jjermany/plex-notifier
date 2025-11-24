@@ -98,6 +98,20 @@
               Check the box next to any show you no longer wish to receive notifications for.
             </p>
 
+            {% if inactive_count > 0 and not show_inactive %}
+              <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle-fill"></i>
+                <strong>{{ inactive_count }}</strong> inactive show{{ 's' if inactive_count != 1 else '' }} hidden (no notifications in 12+ months).
+                <a href="{{ url_for('subscriptions', token=token, show_inactive='true') }}" class="alert-link">Show all shows</a>
+              </div>
+            {% elif show_inactive %}
+              <div class="alert alert-warning" role="alert">
+                <i class="bi bi-eye-fill"></i>
+                Showing all shows, including inactive ones.
+                <a href="{{ url_for('subscriptions', token=token, show_inactive='false') }}" class="alert-link">Hide inactive shows</a>
+              </div>
+            {% endif %}
+
             {% if shows %}
               <div class="show-checkbox-list">
                 {% for show in shows %}
@@ -114,6 +128,65 @@
                   </div>
                 {% endfor %}
               </div>
+
+              <!-- Pagination -->
+              {% if total_pages > 1 %}
+              <nav aria-label="Shows pagination" class="mt-4">
+                <ul class="pagination justify-content-center">
+                  <li class="page-item {% if page == 1 %}disabled{% endif %}">
+                    <a class="page-link"
+                       href="{{ url_for('subscriptions', token=token, page=page-1, show_inactive='true' if show_inactive else 'false') }}"
+                       aria-label="Previous">
+                      <i class="bi bi-chevron-left"></i> Previous
+                    </a>
+                  </li>
+
+                  {% if total_pages <= 7 %}
+                    {% for p in range(1, total_pages + 1) %}
+                    <li class="page-item {% if p == page %}active{% endif %}">
+                      <a class="page-link"
+                         href="{{ url_for('subscriptions', token=token, page=p, show_inactive='true' if show_inactive else 'false') }}">
+                        {{ p }}
+                      </a>
+                    </li>
+                    {% endfor %}
+                  {% else %}
+                    <!-- Show first page -->
+                    <li class="page-item {% if page == 1 %}active{% endif %}">
+                      <a class="page-link" href="{{ url_for('subscriptions', token=token, page=1, show_inactive='true' if show_inactive else 'false') }}">1</a>
+                    </li>
+
+                    {% if page > 3 %}
+                    <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+
+                    <!-- Show pages around current -->
+                    {% for p in range([page-1, 2]|max, [page+1, total_pages-1]|min + 1) %}
+                    <li class="page-item {% if p == page %}active{% endif %}">
+                      <a class="page-link" href="{{ url_for('subscriptions', token=token, page=p, show_inactive='true' if show_inactive else 'false') }}">{{ p }}</a>
+                    </li>
+                    {% endfor %}
+
+                    {% if page < total_pages - 2 %}
+                    <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+
+                    <!-- Show last page -->
+                    <li class="page-item {% if page == total_pages %}active{% endif %}">
+                      <a class="page-link" href="{{ url_for('subscriptions', token=token, page=total_pages, show_inactive='true' if show_inactive else 'false') }}">{{ total_pages }}</a>
+                    </li>
+                  {% endif %}
+
+                  <li class="page-item {% if page == total_pages %}disabled{% endif %}">
+                    <a class="page-link"
+                       href="{{ url_for('subscriptions', token=token, page=page+1, show_inactive='true' if show_inactive else 'false') }}"
+                       aria-label="Next">
+                      Next <i class="bi bi-chevron-right"></i>
+                    </a>
+                  </li>
+                </ul>
+              </nav>
+              {% endif %}
             {% else %}
               <div class="text-center py-4">
                 <i class="bi bi-inbox" style="font-size: 3rem; color: var(--plex-orange);"></i>

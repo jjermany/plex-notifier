@@ -4,7 +4,7 @@ import logging
 import threading
 from functools import wraps
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from flask_limiter import Limiter
@@ -13,7 +13,13 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, Notification
 from .utils import normalize_email, email_to_filename
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm
-from .constants import DEFAULT_HISTORY_LIMIT, HISTORY_ENTRIES_PER_PAGE, MONTHLY_STATS_MONTHS
+from .constants import (
+    DEFAULT_HISTORY_LIMIT,
+    HISTORY_ENTRIES_PER_PAGE,
+    MONTHLY_STATS_MONTHS,
+    SUBSCRIPTIONS_SHOWS_PER_PAGE,
+    INACTIVE_SHOW_THRESHOLD_DAYS,
+)
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 from .logging_utils import TZFormatter
 from .constants import RATE_LIMIT_TEST_EMAIL, RATE_LIMIT_MANUAL_CHECK
@@ -272,24 +278,38 @@ def create_app():
             flash("Preferences updated.", "success")
             return redirect(url_for("subscriptions") + f"?token={token}")
 
+        # Get pagination and filter parameters
+        page = max(int(request.args.get('page', 1)), 1)
+        per_page = SUBSCRIPTIONS_SHOWS_PER_PAGE
+        show_inactive = request.args.get('show_inactive', 'false').lower() == 'true'
+
         user_prefs = UserPreferences.query.filter(
             UserPreferences.email.in_([canon, email])
         ).all()
         global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
         opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
 
-        # Get shows from database notifications (primary source)
-        show_map = {}  # key -> title mapping
-        user_notifications = (
-            Notification.query
+        # Get shows from database notifications (primary source) with last notification date
+        show_map = {}  # key -> {title, last_notified} mapping
+
+        # Get most recent notification for each show
+        from sqlalchemy import func
+        show_latest = (
+            db.session.query(
+                Notification.show_key,
+                Notification.show_title,
+                func.max(Notification.timestamp).label('last_notified')
+            )
             .filter_by(email=canon)
-            .with_entities(Notification.show_key, Notification.show_title)
-            .distinct()
+            .group_by(Notification.show_key, Notification.show_title)
             .all()
         )
 
-        for show_key, show_title in user_notifications:
-            show_map[show_key] = show_title
+        for show_key, show_title, last_notified in show_latest:
+            show_map[show_key] = {
+                'title': show_title,
+                'last_notified': last_notified
+            }
 
         # Fallback to log file if database is empty (backward compatibility)
         if not show_map:
@@ -306,28 +326,71 @@ def create_app():
                                 show_title = parts.split(" [Key:")[0].strip()
                                 key_part = parts.split("[Key:")[1]
                                 show_key = key_part.split("]")[0]
-                                show_map[show_key] = show_title
+                                # For log file entries, we don't have timestamp, set to None
+                                show_map[show_key] = {
+                                    'title': show_title,
+                                    'last_notified': None
+                                }
                             except Exception:
                                 continue
 
-        # Build list of shows with their opt-out status
-        shows_list = [
-            {
+        # Build list of shows with their opt-out status and last notification date
+        shows_list = []
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=INACTIVE_SHOW_THRESHOLD_DAYS)
+
+        for key, info in show_map.items():
+            # Filter inactive shows unless show_inactive is True
+            if not show_inactive and info['last_notified']:
+                # Make timezone-aware if needed
+                last_notified = info['last_notified']
+                if last_notified.tzinfo is None:
+                    last_notified = last_notified.replace(tzinfo=timezone.utc)
+
+                # Skip shows that haven't notified in the threshold period
+                if last_notified < cutoff_date:
+                    continue
+
+            shows_list.append({
                 'key': key,
-                'title': title,
-                'opted_out': key in opted_out_shows
-            }
-            for key, title in show_map.items()
-        ]
+                'title': info['title'],
+                'opted_out': key in opted_out_shows,
+                'last_notified': info['last_notified']
+            })
+
+        # Sort alphabetically
         shows_list.sort(key=lambda x: x['title'])
+
+        # Calculate pagination
+        total_shows = len(shows_list)
+        total_pages = max((total_shows - 1) // per_page + 1, 1) if total_shows > 0 else 1
+
+        # Get shows for current page
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_shows = shows_list[start_idx:end_idx]
+
+        # Count inactive shows for display
+        inactive_count = 0
+        if not show_inactive:
+            for key, info in show_map.items():
+                if info['last_notified']:
+                    last_notified = info['last_notified']
+                    if last_notified.tzinfo is None:
+                        last_notified = last_notified.replace(tzinfo=timezone.utc)
+                    if last_notified < cutoff_date:
+                        inactive_count += 1
 
         return render_template(
             "subscriptions.html",
             email=email,
             token=token,
             global_opt_out=global_opt_out,
-            shows=shows_list,
+            shows=paginated_shows,
             opted_out_shows=opted_out_shows,
+            page=page,
+            total_pages=total_pages,
+            show_inactive=show_inactive,
+            inactive_count=inactive_count,
         )
 
     @app.route('/health')

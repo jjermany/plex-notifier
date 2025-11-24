@@ -400,50 +400,16 @@ function initSubscriptionsPage() {
     });
   }
 
-  // Add search/filter for shows
-  const showList = document.querySelector('.show-checkbox-list');
-  if (showList && showCheckboxes.length > 10) {
-    // Create search input
-    const searchContainer = document.createElement('div');
-    searchContainer.className = 'mb-3';
-    searchContainer.innerHTML = `
-      <input type="text"
-             class="form-control"
-             id="showSearch"
-             placeholder="Search shows..."
-             aria-label="Search shows">
-    `;
-
-    showList.parentElement.insertBefore(searchContainer, showList);
-
-    const searchInput = document.getElementById('showSearch');
-    searchInput.addEventListener('input', function() {
-      const searchTerm = this.value.toLowerCase();
-
-      showCheckboxes.forEach(checkbox => {
-        const label = checkbox.nextElementSibling;
-        const showName = label.textContent.toLowerCase();
-        const formCheck = checkbox.parentElement;
-
-        if (showName.includes(searchTerm)) {
-          formCheck.style.display = '';
-        } else {
-          formCheck.style.display = 'none';
-        }
-      });
-    });
-  }
-
-  // Add select all / deselect all buttons
+  // Add select all / deselect all buttons for current page
   if (showCheckboxes.length > 5) {
     const buttonContainer = document.createElement('div');
     buttonContainer.className = 'mb-3 d-flex gap-2';
     buttonContainer.innerHTML = `
       <button type="button" class="btn btn-sm btn-outline-secondary" id="selectAllShows">
-        Select All
+        Select All on Page
       </button>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAllShows">
-        Deselect All
+        Deselect All on Page
       </button>
     `;
 
