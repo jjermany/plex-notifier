@@ -454,8 +454,10 @@ def create_app():
         def fmt_dt(dt: datetime | None):
             if not dt:
                 return ""
+            # Database stores timestamps as naive UTC datetimes
+            # First mark as UTC, then convert to local timezone
             if tz and dt.tzinfo is None:
-                dt = dt.replace(tzinfo=tz)
+                dt = dt.replace(tzinfo=timezone.utc).astimezone(tz)
             date = dt.strftime("%m/%d/%Y")
             hour = dt.strftime("%I").lstrip('0') or '0'
             minute = dt.strftime("%M")
