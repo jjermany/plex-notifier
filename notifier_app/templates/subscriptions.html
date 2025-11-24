@@ -151,6 +151,8 @@
               {% if shows %}
               <div class="show-checkbox-list">
                 {% for show in shows %}
+                  <!-- Hidden input to track which shows are visible on this page -->
+                  <input type="hidden" name="visible_shows" value="{{ show.key }}">
                   <div class="form-check mb-2">
                     <input class="form-check-input"
                            type="checkbox"

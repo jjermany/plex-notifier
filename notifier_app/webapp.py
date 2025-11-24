@@ -255,6 +255,7 @@ def create_app():
         if request.method == "POST":
             global_opt_out = bool(request.form.get("global_opt_out"))
             show_optouts = request.form.getlist("show_optouts")
+            visible_shows = request.form.getlist("visible_shows")  # Track shows on current page
 
             pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
             if not pref:
@@ -266,11 +267,15 @@ def create_app():
             pref.global_opt_out = global_opt_out
             db.session.add(pref)
 
-            UserPreferences.query.filter(
-                UserPreferences.email.in_([canon, email]),
-                UserPreferences.show_key != None
-            ).delete(synchronize_session=False)
+            # Only delete opt-outs for shows that are visible on the current page
+            # This preserves opt-outs for shows not currently displayed
+            if visible_shows:
+                UserPreferences.query.filter(
+                    UserPreferences.email.in_([canon, email]),
+                    UserPreferences.show_key.in_(visible_shows)
+                ).delete(synchronize_session=False)
 
+            # Add opt-outs for checked shows
             for show_key in show_optouts:
                 db.session.add(UserPreferences(email=canon, show_key=show_key, show_opt_out=True))
 
