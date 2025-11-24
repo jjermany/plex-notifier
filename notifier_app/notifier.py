@@ -364,6 +364,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     'episode_mobile_link': episode_mobile_link,
                 })
 
+            # Sort episodes within each show by season and episode number
+            for show_title in grouped:
+                grouped[show_title]['episodes'].sort(key=lambda ep: (ep['season'], ep['episode']))
+
+            # Sort shows alphabetically by title for consistent ordering
+            grouped = dict(sorted(grouped.items(), key=lambda item: item[0].lower()))
+
             token = serializer.dumps(email, salt="unsubscribe")
             html_body = template.render(
                 grouped_episodes=grouped,
