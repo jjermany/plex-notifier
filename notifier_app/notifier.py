@@ -348,16 +348,28 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if plex_mobile_base and ep.ratingKey:
                     episode_mobile_link = f"{plex_mobile_base}{quote('/library/metadata/' + str(ep.ratingKey))}"
 
+                # Truncate synopsis to 200 characters for better email readability
+                synopsis = ep.summary or 'No synopsis available.'
+                if len(synopsis) > 200:
+                    synopsis = synopsis[:197] + '...'
+
                 grouped[show_title]['episodes'].append({
                     'show_title': ep.grandparentTitle,
                     'season': ep.parentIndex,
                     'episode': ep.index,
                     'ep_title': ep.title,
-                    'synopsis': ep.summary or 'No synopsis available.',
+                    'synopsis': synopsis,
                     'episode_poster_ref': episode_ref,
                     'episode_link': episode_link,
                     'episode_mobile_link': episode_mobile_link,
                 })
+
+            # Sort episodes within each show by season and episode number
+            for show_title in grouped:
+                grouped[show_title]['episodes'].sort(key=lambda ep: (ep['season'], ep['episode']))
+
+            # Sort shows alphabetically by title for consistent ordering
+            grouped = dict(sorted(grouped.items(), key=lambda item: item[0].lower()))
 
             token = serializer.dumps(email, salt="unsubscribe")
             html_body = template.render(
