@@ -400,8 +400,41 @@ function initSubscriptionsPage() {
     });
   }
 
-  // Server-side search is now handled via form submission
-  // No client-side filtering needed
+  // Server-side search is now handled via JavaScript navigation
+  const showSearch = document.getElementById('showSearch');
+  const searchButton = document.getElementById('searchButton');
+
+  if (showSearch && searchButton) {
+    const performSearch = () => {
+      const searchQuery = showSearch.value.trim();
+      const token = showSearch.dataset.token;
+      const showInactive = showSearch.dataset.showInactive;
+
+      // Build the URL with query parameters
+      const params = new URLSearchParams({
+        token: token,
+        show_inactive: showInactive
+      });
+
+      if (searchQuery) {
+        params.append('search', searchQuery);
+      }
+
+      // Navigate to the search URL
+      window.location.href = `/subscriptions?${params.toString()}`;
+    };
+
+    // Handle search button click
+    searchButton.addEventListener('click', performSearch);
+
+    // Handle Enter key in search box
+    showSearch.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        performSearch();
+      }
+    });
+  }
 
   // Add select all / deselect all buttons for current page
   if (showCheckboxes.length > 5) {
