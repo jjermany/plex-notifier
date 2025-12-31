@@ -476,6 +476,26 @@ def _save_notification_to_db(email: str, episode: Episode) -> None:
 def _get_users(s: Settings) -> List[Dict[str, Any]]:
     if s.tautulli_url and s.tautulli_api_key:
         try:
+            plex = PlexServer(s.plex_url, s.plex_token)
+            account = plex.myPlexAccount()
+
+            whitelist: Set[str] = set()
+
+            def _add_to_whitelist(user: Any) -> None:
+                email = getattr(user, "email", None)
+                username = getattr(user, "username", None) or getattr(user, "title", None)
+
+                if email:
+                    whitelist.add(normalize_email(email))
+                if username and isinstance(username, str):
+                    username_normalized = username.strip().lower()
+                    if username_normalized:
+                        whitelist.add(username_normalized)
+
+            _add_to_whitelist(account)
+            for plex_user in account.users():
+                _add_to_whitelist(plex_user)
+
             base = f"{s.tautulli_url.rstrip('/')}/api/v2"
             resp = requests.get(
                 base,
@@ -484,14 +504,30 @@ def _get_users(s: Settings) -> List[Dict[str, Any]]:
             )
             resp.raise_for_status()
             data = resp.json().get('response', {}).get('data', [])
-            return [
-                {
-                    'user_id': u.get('user_id'),
-                    'username': u.get('username'),
-                    'email': u.get('email') or s.from_address
-                }
-                for u in data
-            ]
+            filtered_users = []
+
+            for u in data:
+                email = u.get('email')
+                username = u.get('username')
+
+                normalized_email = normalize_email(email) if email else None
+                normalized_username = username.strip().lower() if isinstance(username, str) else None
+
+                if not email:
+                    continue
+
+                if (normalized_email and normalized_email in whitelist) or (
+                    normalized_username and normalized_username in whitelist
+                ):
+                    filtered_users.append(
+                        {
+                            'user_id': u.get('user_id'),
+                            'username': username,
+                            'email': email
+                        }
+                    )
+
+            return filtered_users
         except Exception as e:
             current_app.logger.error(f"Error fetching users from Tautulli: {e}")
     return []

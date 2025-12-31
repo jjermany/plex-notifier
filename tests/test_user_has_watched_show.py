@@ -1,5 +1,11 @@
+import os
+import sys
 import unittest
 from unittest.mock import patch
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+os.environ.setdefault("SECRET_KEY", "testing-secret-key")
 
 from notifier_app.notifier import _user_has_watched_show
 
