@@ -195,7 +195,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No recent episodes found.")
             return
 
-        users = _get_users(s)
+        users = _get_users(s, machine_id)
         if not users:
             current_app.logger.info("⚠️ No users fetched.")
             return
@@ -473,7 +473,7 @@ def _save_notification_to_db(email: str, episode: Episode) -> None:
         db.session.rollback()
 
 
-def _get_users(s: Settings) -> List[Dict[str, Any]]:
+def _get_users(s: Settings, machine_id: Optional[str] = None) -> List[Dict[str, Any]]:
     if s.tautulli_url and s.tautulli_api_key:
         try:
             plex = PlexServer(s.plex_url, s.plex_token)
@@ -492,9 +492,45 @@ def _get_users(s: Settings) -> List[Dict[str, Any]]:
                     if username_normalized:
                         whitelist.add(username_normalized)
 
+            def _user_has_server_share(user: Any) -> bool:
+                if not machine_id:
+                    return True
+
+                servers = None
+                try:
+                    servers_attr = getattr(user, "servers", None)
+                    servers = servers_attr() if callable(servers_attr) else servers_attr
+                except Exception as exc:
+                    current_app.logger.warning(
+                        f"⚠️ Unable to load shared servers for Plex user {getattr(user, 'username', None)}: {exc}"
+                    )
+                    return False
+
+                if not servers:
+                    current_app.logger.warning(
+                        "⚠️ Plex user missing server share metadata; skipping share validation for user "
+                        f"{getattr(user, 'username', None) or getattr(user, 'title', None)}."
+                    )
+                    return False
+
+                for server in servers:
+                    if isinstance(server, dict):
+                        server_machine_id = server.get("machineIdentifier") or server.get("clientIdentifier")
+                    else:
+                        server_machine_id = getattr(server, "machineIdentifier", None) or getattr(
+                            server,
+                            "clientIdentifier",
+                            None
+                        )
+                    if server_machine_id == machine_id:
+                        return True
+
+                return False
+
             _add_to_whitelist(account)
             for plex_user in account.users():
-                _add_to_whitelist(plex_user)
+                if _user_has_server_share(plex_user):
+                    _add_to_whitelist(plex_user)
 
             base = f"{s.tautulli_url.rstrip('/')}/api/v2"
             resp = requests.get(
