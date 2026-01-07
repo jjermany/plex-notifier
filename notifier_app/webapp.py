@@ -63,6 +63,20 @@ def create_app():
         media_dir = os.path.abspath(os.path.join(app.root_path, "..", "media"))
         return send_from_directory(media_dir, filename)
 
+    @app.route('/manifest.webmanifest')
+    def manifest():
+        static_dir = os.path.abspath(os.path.join(app.root_path, "static"))
+        return send_from_directory(
+            static_dir,
+            "manifest.webmanifest",
+            mimetype="application/manifest+json",
+        )
+
+    @app.route('/icons/<path:filename>')
+    def icon_file(filename):
+        icons_dir = os.path.abspath(os.path.join(app.root_path, "static", "icons"))
+        return send_from_directory(icons_dir, filename)
+
     # Validate SECRET_KEY
     secret_key = os.environ.get('SECRET_KEY', 'change-me')
     if secret_key == 'change-me':
