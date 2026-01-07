@@ -6,7 +6,7 @@ from functools import wraps
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, redirect, url_for, flash, request, Response
+from flask import Flask, render_template, redirect, url_for, flash, request, Response, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
@@ -57,6 +57,11 @@ def create_app():
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
+
+    @app.route('/media/<path:filename>')
+    def media_file(filename):
+        media_dir = os.path.abspath(os.path.join(app.root_path, "..", "media"))
+        return send_from_directory(media_dir, filename)
 
     # Validate SECRET_KEY
     secret_key = os.environ.get('SECRET_KEY', 'change-me')
