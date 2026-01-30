@@ -152,7 +152,7 @@
               <div class="show-checkbox-list">
                 {% for show in shows %}
                   <!-- Hidden input to track which shows are visible on this page -->
-                  <input type="hidden" name="visible_shows" value="{{ show.key }}">
+                  <input type="hidden" name="visible_shows" value="{{ show.key }}::{{ show.show_key }}">
                   <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between border-bottom border-secondary pb-2 mb-2">
                     <div class="text-white mb-2 mb-md-0">
                       <i class="bi bi-film"></i> {{ show.title }}
@@ -163,7 +163,7 @@
                                type="checkbox"
                                id="subscribe_{{ loop.index }}"
                                name="show_subscriptions"
-                               value="{{ show.key }}"
+                               value="{{ show.key }}::{{ show.show_key }}"
                                {% if show.key in subscribed_shows %}checked{% endif %}>
                         <label class="form-check-label text-white" for="subscribe_{{ loop.index }}">
                           Always notify me
@@ -174,7 +174,7 @@
                                type="checkbox"
                                id="optout_{{ loop.index }}"
                                name="show_optouts"
-                               value="{{ show.key }}"
+                               value="{{ show.key }}::{{ show.show_key }}"
                                {% if show.key in opted_out_shows %}checked{% endif %}>
                         <label class="form-check-label text-white" for="optout_{{ loop.index }}">
                           Opt out

@@ -11,7 +11,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, Notification, ShowSubscription
-from .utils import normalize_email, email_to_filename
+from .utils import normalize_email, email_to_filename, normalize_show_identity
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm
 from .constants import (
     DEFAULT_HISTORY_LIMIT,
@@ -148,6 +148,60 @@ def create_app():
             except Exception as e:
                 app.logger.warning(f"Could not check user_preferences constraints: {e}")
 
+        # Add show_guid columns if missing
+        with db.engine.begin() as conn:
+            if 'notifications' in inspector.get_table_names():
+                existing_cols = {c['name'] for c in inspector.get_columns('notifications')}
+                if 'show_guid' not in existing_cols:
+                    conn.execute(text('ALTER TABLE notifications ADD COLUMN show_guid VARCHAR'))
+                    app.logger.info("Added show_guid column to notifications table")
+            if 'user_preferences' in inspector.get_table_names():
+                existing_cols = {c['name'] for c in inspector.get_columns('user_preferences')}
+                if 'show_guid' not in existing_cols:
+                    conn.execute(text('ALTER TABLE user_preferences ADD COLUMN show_guid VARCHAR'))
+                    app.logger.info("Added show_guid column to user_preferences table")
+            if 'show_subscriptions' in inspector.get_table_names():
+                existing_cols = {c['name'] for c in inspector.get_columns('show_subscriptions')}
+                if 'show_guid' not in existing_cols:
+                    conn.execute(text('ALTER TABLE show_subscriptions ADD COLUMN show_guid VARCHAR'))
+                    app.logger.info("Added show_guid column to show_subscriptions table")
+
+        # Backfill show_guid for existing notifications and preferences
+        try:
+            notifications = Notification.query.filter(Notification.show_guid.is_(None)).all()
+            if notifications:
+                for notif in notifications:
+                    notif.show_guid = normalize_show_identity(notif.show_title)
+                db.session.commit()
+
+            show_guid_map = {
+                notif.show_key: notif.show_guid
+                for notif in Notification.query.filter(Notification.show_guid.isnot(None)).all()
+                if notif.show_key and notif.show_guid
+            }
+            prefs = UserPreferences.query.filter(
+                UserPreferences.show_guid.is_(None),
+                UserPreferences.show_key.isnot(None)
+            ).all()
+            subs = ShowSubscription.query.filter(
+                ShowSubscription.show_guid.is_(None),
+                ShowSubscription.show_key.isnot(None)
+            ).all()
+            updates = False
+            for pref in prefs:
+                if pref.show_key in show_guid_map:
+                    pref.show_guid = show_guid_map[pref.show_key]
+                    updates = True
+            for sub in subs:
+                if sub.show_key in show_guid_map:
+                    sub.show_guid = show_guid_map[sub.show_key]
+                    updates = True
+            if updates:
+                db.session.commit()
+        except Exception as exc:
+            app.logger.warning(f"Failed to backfill show identifiers: {exc}")
+            db.session.rollback()
+
         # Create default settings if none exist
         s = Settings.query.first()
         if not s:
@@ -276,10 +330,25 @@ def create_app():
             return render_template("subscriptions.html", email=None)
 
         if request.method == "POST":
+            def _parse_show_token(value: str) -> tuple[str, str]:
+                if "::" in value:
+                    show_id, show_key = value.split("::", 1)
+                else:
+                    show_id, show_key = value, value
+                return show_id, show_key
+
             global_opt_out = bool(request.form.get("global_opt_out"))
             show_optouts = request.form.getlist("show_optouts")
             show_subscriptions = request.form.getlist("show_subscriptions")
             visible_shows = request.form.getlist("visible_shows")  # Track shows on current page
+            visible_show_ids = []
+            visible_show_keys = []
+            for entry in visible_shows:
+                show_id, show_key = _parse_show_token(entry)
+                if show_id:
+                    visible_show_ids.append(show_id)
+                if show_key:
+                    visible_show_keys.append(show_key)
 
             pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
             if not pref:
@@ -293,23 +362,61 @@ def create_app():
 
             # Only delete opt-outs for shows that are visible on the current page
             # This preserves opt-outs for shows not currently displayed
-            if visible_shows:
+            if visible_show_ids or visible_show_keys:
                 UserPreferences.query.filter(
                     UserPreferences.email.in_([canon, email]),
-                    UserPreferences.show_key.in_(visible_shows)
+                    UserPreferences.show_key.in_(visible_show_keys)
+                ).delete(synchronize_session=False)
+                UserPreferences.query.filter(
+                    UserPreferences.email.in_([canon, email]),
+                    UserPreferences.show_guid.in_(visible_show_ids)
                 ).delete(synchronize_session=False)
                 ShowSubscription.query.filter(
                     ShowSubscription.email.in_([canon, email]),
-                    ShowSubscription.show_key.in_(visible_shows)
+                    ShowSubscription.show_key.in_(visible_show_keys)
+                ).delete(synchronize_session=False)
+                ShowSubscription.query.filter(
+                    ShowSubscription.email.in_([canon, email]),
+                    ShowSubscription.show_guid.in_(visible_show_ids)
                 ).delete(synchronize_session=False)
 
             # Add opt-outs for checked shows
-            for show_key in show_optouts:
-                db.session.add(UserPreferences(email=canon, show_key=show_key, show_opt_out=True))
+            for show_value in show_optouts:
+                show_id, show_key = _parse_show_token(show_value)
+                pref = None
+                if show_id:
+                    pref = UserPreferences.query.filter_by(email=canon, show_guid=show_id).first()
+                if not pref and show_key:
+                    pref = UserPreferences.query.filter_by(email=canon, show_key=show_key).first()
+                if pref:
+                    pref.show_opt_out = True
+                    pref.show_key = show_key or pref.show_key
+                    pref.show_guid = show_id or pref.show_guid
+                else:
+                    db.session.add(UserPreferences(
+                        email=canon,
+                        show_guid=show_id or None,
+                        show_key=show_key,
+                        show_opt_out=True
+                    ))
 
             # Add explicit subscriptions for checked shows
-            for show_key in show_subscriptions:
-                db.session.add(ShowSubscription(email=canon, show_key=show_key))
+            for show_value in show_subscriptions:
+                show_id, show_key = _parse_show_token(show_value)
+                sub = None
+                if show_id:
+                    sub = ShowSubscription.query.filter_by(email=canon, show_guid=show_id).first()
+                if not sub and show_key:
+                    sub = ShowSubscription.query.filter_by(email=canon, show_key=show_key).first()
+                if sub:
+                    sub.show_key = show_key or sub.show_key
+                    sub.show_guid = show_id or sub.show_guid
+                else:
+                    db.session.add(ShowSubscription(
+                        email=canon,
+                        show_guid=show_id or None,
+                        show_key=show_key
+                    ))
 
             db.session.commit()
             flash("Preferences updated.", "success")
@@ -321,17 +428,6 @@ def create_app():
         show_inactive = request.args.get('show_inactive', 'false').lower() == 'true'
         search_query = request.args.get('search', '').strip()
 
-        user_prefs = UserPreferences.query.filter(
-            UserPreferences.email.in_([canon, email])
-        ).all()
-        global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
-        opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
-        subscribed_shows = {
-            s.show_key for s in ShowSubscription.query.filter(
-                ShowSubscription.email.in_([canon, email])
-            ).all()
-        }
-
         # Get shows from database notifications (primary source) with last notification date
         show_map = {}  # key -> {title, last_notified} mapping
 
@@ -340,18 +436,33 @@ def create_app():
         show_latest = (
             db.session.query(
                 Notification.show_key,
+                Notification.show_guid,
                 Notification.show_title,
                 func.max(Notification.timestamp).label('last_notified')
             )
             .filter_by(email=canon)
-            .group_by(Notification.show_key, Notification.show_title)
+            .group_by(Notification.show_key, Notification.show_guid, Notification.show_title)
             .all()
         )
 
-        for show_key, show_title, last_notified in show_latest:
-            show_map[show_key] = {
+        for show_key, show_guid, show_title, last_notified in show_latest:
+            show_id = show_guid or normalize_show_identity(show_title) or show_key
+            if show_id in show_map:
+                if last_notified and show_map[show_id]['last_notified']:
+                    if last_notified > show_map[show_id]['last_notified']:
+                        show_map[show_id]['last_notified'] = last_notified
+                elif last_notified:
+                    show_map[show_id]['last_notified'] = last_notified
+                if show_guid and not show_map[show_id]['show_guid']:
+                    show_map[show_id]['show_guid'] = show_guid
+                if show_key and not show_map[show_id]['show_key']:
+                    show_map[show_id]['show_key'] = show_key
+                continue
+            show_map[show_id] = {
                 'title': show_title,
-                'last_notified': last_notified
+                'last_notified': last_notified,
+                'show_guid': show_guid,
+                'show_key': show_key,
             }
 
         # Fallback to log file if database is empty (backward compatibility)
@@ -370,12 +481,53 @@ def create_app():
                                 key_part = parts.split("[Key:")[1]
                                 show_key = key_part.split("]")[0]
                                 # For log file entries, we don't have timestamp, set to None
-                                show_map[show_key] = {
+                                show_id = normalize_show_identity(show_title) or show_key
+                                show_map[show_id] = {
                                     'title': show_title,
-                                    'last_notified': None
+                                    'last_notified': None,
+                                    'show_guid': None,
+                                    'show_key': show_key,
                                 }
                             except Exception:
                                 continue
+
+        show_key_to_id = {
+            info['show_key']: show_id
+            for show_id, info in show_map.items()
+            if info.get('show_key')
+        }
+
+        user_prefs = UserPreferences.query.filter(
+            UserPreferences.email.in_([canon, email])
+        ).all()
+        global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
+        opted_out_shows = set()
+        prefs_updated = False
+        for pref in user_prefs:
+            if pref.show_key is None:
+                continue
+            show_id = pref.show_guid
+            if not show_id and pref.show_key in show_key_to_id:
+                show_id = show_key_to_id[pref.show_key]
+                pref.show_guid = show_id
+                prefs_updated = True
+            opted_out_shows.add(show_id or pref.show_key)
+
+        subscriptions = ShowSubscription.query.filter(
+            ShowSubscription.email.in_([canon, email])
+        ).all()
+        subscribed_shows = set()
+        subs_updated = False
+        for sub in subscriptions:
+            show_id = sub.show_guid
+            if not show_id and sub.show_key in show_key_to_id:
+                show_id = show_key_to_id[sub.show_key]
+                sub.show_guid = show_id
+                subs_updated = True
+            subscribed_shows.add(show_id or sub.show_key)
+
+        if prefs_updated or subs_updated:
+            db.session.commit()
 
         # Build list of shows with their opt-out status and last notification date
         shows_list = []
@@ -395,6 +547,8 @@ def create_app():
 
             shows_list.append({
                 'key': key,
+                'show_key': info.get('show_key') or "",
+                'show_guid': info.get('show_guid') or "",
                 'title': info['title'],
                 'opted_out': key in opted_out_shows,
                 'subscribed': key in subscribed_shows,

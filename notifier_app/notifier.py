@@ -15,7 +15,7 @@ from functools import lru_cache
 from cachetools import TTLCache
 
 from .logging_utils import TZFormatter
-from .utils import normalize_email, email_to_filename
+from .utils import normalize_email, email_to_filename, normalize_show_identity
 from .constants import (
     NOTIFICATION_HISTORY_LIMIT,
     NOTIFICATION_CACHE_TTL_SECONDS,
@@ -76,6 +76,21 @@ serializer = URLSafeTimedSerializer(secret_key)
 # In-memory cache for notification history (TTL cache with automatic expiry)
 # Key: email, Value: Set of notification identifiers
 notification_cache = TTLCache(maxsize=1000, ttl=NOTIFICATION_CACHE_TTL_SECONDS)
+
+
+def _get_show_guid_for_episode(episode: Episode) -> Optional[str]:
+    guid = getattr(episode, "grandparentGuid", None)
+    if isinstance(guid, (list, tuple)):
+        guid = guid[0] if guid else None
+    if guid:
+        return str(guid)
+
+    title = getattr(episode, "grandparentTitle", None)
+    year = getattr(episode, "grandparentYear", None)
+    if year is None:
+        year = getattr(episode, "year", None)
+    fallback_guid = normalize_show_identity(title, year)
+    return fallback_guid or None
 
 
 def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMIT) -> Set[str]:
@@ -227,32 +242,71 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 continue
 
             subscribed_show_keys: Set[str] = set()
+            subscribed_show_guids: Set[str] = set()
+            subs_by_key: Dict[str, ShowSubscription] = {}
+            subs_by_guid: Dict[str, ShowSubscription] = {}
             if explicit_subscriptions_enabled:
-                subscribed_show_keys = {
-                    sub.show_key for sub in ShowSubscription.query.filter(
-                        ShowSubscription.email.in_([canon, user_email])
-                    ).all()
-                }
+                subscriptions = ShowSubscription.query.filter(
+                    ShowSubscription.email.in_([canon, user_email])
+                ).all()
+                for sub in subscriptions:
+                    if sub.show_key:
+                        subscribed_show_keys.add(sub.show_key)
+                        subs_by_key[sub.show_key] = sub
+                    if sub.show_guid:
+                        subscribed_show_guids.add(sub.show_guid)
+                        subs_by_guid[sub.show_guid] = sub
 
             watchable: List[Episode] = []
             recent_notified = _get_recent_notifications(canon)
+            needs_commit = False
 
             for ep in recent_eps:
                 show_key = ep.grandparentRatingKey
                 if not show_key:
                     continue
+                show_key_str = str(show_key)
+                show_guid = _get_show_guid_for_episode(ep)
 
                 # 🔒 Check per-show opt-out
-                show_pref = UserPreferences.query.filter_by(email=canon, show_key=str(show_key)).first()
+                show_pref = None
+                if show_guid:
+                    show_pref = UserPreferences.query.filter_by(email=canon, show_guid=show_guid).first()
+                    if not show_pref:
+                        show_pref = UserPreferences.query.filter_by(email=user_email, show_guid=show_guid).first()
                 if not show_pref:
-                    show_pref = UserPreferences.query.filter_by(email=user_email, show_key=str(show_key)).first()
-                    if show_pref and show_pref.email != canon:
+                    show_pref = UserPreferences.query.filter_by(email=canon, show_key=show_key_str).first()
+                    if not show_pref:
+                        show_pref = UserPreferences.query.filter_by(email=user_email, show_key=show_key_str).first()
+                if not show_pref:
+                    show_pref = None
+                if show_pref:
+                    if show_pref.email != canon:
                         show_pref.email = canon
-                        db.session.commit()
+                        needs_commit = True
+                    if show_guid and show_pref.show_guid != show_guid:
+                        show_pref.show_guid = show_guid
+                        needs_commit = True
+                    if show_pref.show_key != show_key_str:
+                        show_pref.show_key = show_key_str
+                        needs_commit = True
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                is_explicitly_subscribed = explicit_subscriptions_enabled and str(show_key) in subscribed_show_keys
+                if show_guid and show_key_str in subs_by_key:
+                    sub = subs_by_key[show_key_str]
+                    if sub.show_guid != show_guid:
+                        sub.show_guid = show_guid
+                        needs_commit = True
+                if show_guid and show_guid in subs_by_guid:
+                    sub = subs_by_guid[show_guid]
+                    if sub.show_key != show_key_str:
+                        sub.show_key = show_key_str
+                        needs_commit = True
+
+                is_explicitly_subscribed = explicit_subscriptions_enabled and (
+                    (show_guid and show_guid in subscribed_show_guids) or show_key_str in subscribed_show_keys
+                )
                 if not is_explicitly_subscribed and not _user_has_watched_show(s, uid, show_key):
                     continue
                 if _user_has_history(s, uid, ep.ratingKey):
@@ -263,6 +317,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     continue
 
                 watchable.append(ep)
+
+            if needs_commit:
+                try:
+                    db.session.commit()
+                except Exception as exc:
+                    current_app.logger.warning(f"Failed to backfill show identifiers for {user_email}: {exc}")
+                    db.session.rollback()
 
             if watchable:
                 user_eps[user_email] = watchable
@@ -467,6 +528,7 @@ def _save_notification_to_db(email: str, episode: Episode) -> None:
             email=normalized_email,
             show_title=episode.grandparentTitle,
             show_key=str(episode.grandparentRatingKey),
+            show_guid=_get_show_guid_for_episode(episode),
             season=episode.parentIndex,
             episode=episode.index,
             episode_title=episode.title,
