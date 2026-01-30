@@ -78,18 +78,37 @@ serializer = URLSafeTimedSerializer(secret_key)
 notification_cache = TTLCache(maxsize=1000, ttl=NOTIFICATION_CACHE_TTL_SECONDS)
 
 
-def _get_show_guid_for_episode(episode: Episode) -> Optional[str]:
+def _extract_show_guid(episode: Episode) -> Optional[str]:
     guid = getattr(episode, "grandparentGuid", None)
     if isinstance(guid, (list, tuple)):
         guid = guid[0] if guid else None
     if guid:
         return str(guid)
+    return None
 
+
+def _get_fallback_identity_for_episode(episode: Episode) -> str:
     title = getattr(episode, "grandparentTitle", None)
     year = getattr(episode, "grandparentYear", None)
     if year is None:
         year = getattr(episode, "year", None)
-    fallback_guid = normalize_show_identity(title, year)
+    return normalize_show_identity(title, year)
+
+
+def _get_show_guid_for_episode(
+    episode: Episode,
+    *,
+    fallback_identity: Optional[str] = None,
+    prefer_fallback_identity: bool = False,
+) -> Optional[str]:
+    fallback_guid = fallback_identity or _get_fallback_identity_for_episode(episode)
+    if prefer_fallback_identity and fallback_guid:
+        return fallback_guid
+
+    guid = _extract_show_guid(episode)
+    if guid:
+        return guid
+
     return fallback_guid or None
 
 
@@ -215,7 +234,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No users fetched.")
             return
 
-        user_eps: Dict[str, List[Episode]] = {}
+        user_eps: Dict[str, List[Dict[str, Any]]] = {}
 
         for user in users:
             uid = user.get('user_id')
@@ -240,24 +259,75 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             if pref and pref.global_opt_out:
                 continue
 
-            watchable: List[Episode] = []
+            watchable: List[Dict[str, Any]] = []
             recent_notified = _get_recent_notifications(canon)
+            recent_show_keys: Set[str] = set()
+            recent_show_guids: Set[str] = set()
+            recent_show_fallbacks: Set[str] = set()
+            try:
+                recent_notifications = (
+                    Notification.query
+                    .filter_by(email=canon)
+                    .order_by(Notification.timestamp.desc())
+                    .limit(NOTIFICATION_HISTORY_LIMIT)
+                    .all()
+                )
+                for notif in recent_notifications:
+                    if notif.show_key:
+                        recent_show_keys.add(str(notif.show_key))
+                    if notif.show_guid:
+                        recent_show_guids.add(str(notif.show_guid))
+                    if notif.show_title:
+                        fallback_identity = normalize_show_identity(notif.show_title)
+                        if fallback_identity:
+                            recent_show_fallbacks.add(fallback_identity)
+            except Exception as exc:
+                current_app.logger.warning(f"Unable to load recent show identifiers for {user_email}: {exc}")
             needs_commit = False
 
             for ep in recent_eps:
                 show_key = ep.grandparentRatingKey
-                if not show_key:
+                show_key_str = str(show_key) if show_key is not None else None
+                show_title = ep.grandparentTitle
+                fallback_identity = _get_fallback_identity_for_episode(ep)
+                raw_show_guid = _extract_show_guid(ep)
+
+                if not show_key_str and not fallback_identity:
                     continue
-                show_key_str = str(show_key)
-                show_guid = _get_show_guid_for_episode(ep)
+
+                has_recent_notification_for_show = any(
+                    candidate
+                    for candidate in (show_key_str, raw_show_guid, fallback_identity)
+                    if candidate and candidate in (recent_show_keys | recent_show_guids | recent_show_fallbacks)
+                )
+                mismatch_detected = False
+                if fallback_identity and has_recent_notification_for_show:
+                    if show_key_str and show_key_str not in recent_show_keys:
+                        mismatch_detected = True
+                    if raw_show_guid and raw_show_guid not in recent_show_guids:
+                        mismatch_detected = True
+                    if not show_key_str and not raw_show_guid:
+                        mismatch_detected = True
+
+                prefer_fallback_identity = mismatch_detected or (show_key_str is None and bool(fallback_identity))
+                fallback_log_needed = prefer_fallback_identity
+                show_guid = _get_show_guid_for_episode(
+                    ep,
+                    fallback_identity=fallback_identity,
+                    prefer_fallback_identity=prefer_fallback_identity,
+                )
 
                 # 🔒 Check per-show opt-out
                 show_pref = None
-                if show_guid:
-                    show_pref = UserPreferences.query.filter_by(email=canon, show_guid=show_guid).first()
+                for guid_candidate in (raw_show_guid, fallback_identity):
+                    if not guid_candidate:
+                        continue
+                    show_pref = UserPreferences.query.filter_by(email=canon, show_guid=guid_candidate).first()
                     if not show_pref:
-                        show_pref = UserPreferences.query.filter_by(email=user_email, show_guid=show_guid).first()
-                if not show_pref:
+                        show_pref = UserPreferences.query.filter_by(email=user_email, show_guid=guid_candidate).first()
+                    if show_pref:
+                        break
+                if not show_pref and show_key_str is not None:
                     show_pref = UserPreferences.query.filter_by(email=canon, show_key=show_key_str).first()
                     if not show_pref:
                         show_pref = UserPreferences.query.filter_by(email=user_email, show_key=show_key_str).first()
@@ -270,22 +340,49 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     if show_guid and show_pref.show_guid != show_guid:
                         show_pref.show_guid = show_guid
                         needs_commit = True
-                    if show_pref.show_key != show_key_str:
+                    if show_pref.show_key != show_key_str and show_key_str is not None:
                         show_pref.show_key = show_key_str
                         needs_commit = True
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                if not _user_has_watched_show(s, uid, show_key):
-                    continue
+                has_watched_show = _user_has_watched_show(s, uid, show_key, fallback_identity)
+                if not has_watched_show:
+                    if has_recent_notification_for_show and fallback_identity:
+                        prefer_fallback_identity = True
+                        fallback_log_needed = True
+                        show_guid = _get_show_guid_for_episode(
+                            ep,
+                            fallback_identity=fallback_identity,
+                            prefer_fallback_identity=prefer_fallback_identity,
+                        )
+                        has_watched_show = True
+                    else:
+                        continue
+                if prefer_fallback_identity and fallback_identity and fallback_log_needed:
+                    current_app.logger.info(
+                        "Fallback identity match used for show "
+                        f"{show_title or 'Unknown'} ({fallback_identity}) for {user_email}."
+                    )
+                    fallback_log_needed = False
+                if show_pref and show_guid and show_pref.show_guid != show_guid:
+                    show_pref.show_guid = show_guid
+                    needs_commit = True
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue
 
-                ep_id = f"{show_key}|S{ep.parentIndex}E{ep.index}"
+                show_key_for_id = show_key_str or fallback_identity
+                if not show_key_for_id:
+                    continue
+                ep_id = f"{show_key_for_id}|S{ep.parentIndex}E{ep.index}"
                 if ep_id in recent_notified:
                     continue
 
-                watchable.append(ep)
+                watchable.append({
+                    "episode": ep,
+                    "show_guid": show_guid,
+                    "fallback_identity": fallback_identity,
+                })
 
             if needs_commit:
                 try:
@@ -330,7 +427,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             images_attached = {}
             grouped = {}
 
-            for idx, ep in enumerate(eps, start=1):
+            for idx, ep_payload in enumerate(eps, start=1):
+                ep = ep_payload["episode"]
                 show_title = ep.grandparentTitle
                 show_link = None
                 show_mobile_link = None
@@ -444,15 +542,19 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             if email_success:
                 # Log to file
                 user_log = get_user_logger(email)
-                for ep in eps:
+                for ep_payload in eps:
+                    ep = ep_payload["episode"]
                     user_log.info(f"Notified: {ep.grandparentTitle} [Key:{ep.grandparentRatingKey}] S{ep.parentIndex}E{ep.index} - {ep.title}")
                     # Save to database for better tracking
-                    _save_notification_to_db(email, ep)
+                    _save_notification_to_db(email, ep, ep_payload.get("show_guid"))
 
                 current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
-                notif_logger.info(
-                    f"Sent to {email} | Episodes: {', '.join(f'{e.grandparentTitle} S{e.parentIndex}E{e.index}' for e in eps)}"
+                episodes_desc = ", ".join(
+                    f"{payload['episode'].grandparentTitle} "
+                    f"S{payload['episode'].parentIndex}E{payload['episode'].index}"
+                    for payload in eps
                 )
+                notif_logger.info(f"Sent to {email} | Episodes: {episodes_desc}")
             else:
                 current_app.logger.error(f"❌ Failed to send email to {email} after all retry attempts")
 
@@ -489,15 +591,19 @@ def get_user_logger(email):
     return logger
 
 
-def _save_notification_to_db(email: str, episode: Episode) -> None:
+def _save_notification_to_db(
+    email: str,
+    episode: Episode,
+    show_guid_override: Optional[str] = None,
+) -> None:
     """Save notification to database for tracking and deduplication."""
     try:
         normalized_email = normalize_email(email)
         notification = Notification(
             email=normalized_email,
             show_title=episode.grandparentTitle,
-            show_key=str(episode.grandparentRatingKey),
-            show_guid=_get_show_guid_for_episode(episode),
+            show_key=str(episode.grandparentRatingKey) if episode.grandparentRatingKey is not None else None,
+            show_guid=show_guid_override or _get_show_guid_for_episode(episode),
             season=episode.parentIndex,
             episode=episode.index,
             episode_title=episode.title,
@@ -632,7 +738,12 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
         return False
 
 
-def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: Any) -> bool:
+def _user_has_watched_show(
+    s: Settings,
+    user_id: int,
+    grandparent_rating_key: Any,
+    fallback_identity: Optional[str] = None,
+) -> bool:
     def _is_affirmative_watched(value: Any) -> bool:
         if value is None:
             return False
@@ -656,17 +767,18 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
         # Tautulli's API caps the history "length" parameter at 1000 records.
         page_length = 1000
         start = 0
-        grandparent_key_str = str(grandparent_rating_key)
+        grandparent_key_str = str(grandparent_rating_key) if grandparent_rating_key is not None else ""
 
         while True:
             params = {
                 'apikey': s.tautulli_api_key,
                 'cmd': 'get_history',
                 'user_id': user_id,
-                'grandparent_rating_key': grandparent_rating_key,
                 'start': start,
                 'length': page_length
             }
+            if grandparent_rating_key is not None:
+                params['grandparent_rating_key'] = grandparent_rating_key
             resp = requests.get(base, params=params, timeout=10)
             resp.raise_for_status()
 
@@ -674,11 +786,18 @@ def _user_has_watched_show(s: Settings, user_id: int, grandparent_rating_key: An
             history = payload.get('data') or []
 
             for item in history:
+                watched_status = item.get('watched_status')
                 gp_key = str(item.get('grandparent_rating_key'))
-                if gp_key != grandparent_key_str:
-                    continue
-                if _is_affirmative_watched(item.get('watched_status')):
-                    return True
+                if grandparent_rating_key is not None and gp_key == grandparent_key_str:
+                    if _is_affirmative_watched(watched_status):
+                        return True
+                if fallback_identity:
+                    item_identity = normalize_show_identity(
+                        item.get('grandparent_title'),
+                        item.get('grandparent_year') or item.get('year'),
+                    )
+                    if item_identity == fallback_identity and _is_affirmative_watched(watched_status):
+                        return True
 
             records_filtered = payload.get('recordsFiltered')
             if not history:
