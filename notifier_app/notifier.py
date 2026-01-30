@@ -15,7 +15,7 @@ from functools import lru_cache
 from cachetools import TTLCache
 
 from .logging_utils import TZFormatter
-from .utils import normalize_email, email_to_filename, normalize_show_identity
+from .utils import normalize_email, email_to_filename, normalize_show_identity, redact_email
 from .constants import (
     NOTIFICATION_HISTORY_LIMIT,
     NOTIFICATION_CACHE_TTL_SECONDS,
@@ -247,10 +247,14 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             # Validate email has domain
             if '@' not in user_email:
-                current_app.logger.warning(f"⚠️ Skipping user with incomplete email: {user_email}")
+                current_app.logger.warning(
+                    "⚠️ Skipping user with incomplete email: %s",
+                    redact_email(user_email),
+                )
                 continue
 
             canon = normalize_email(user_email)
+            redacted_email = redact_email(user_email)
 
             # 🔒 Check global opt-out
             pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
@@ -285,7 +289,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                         if fallback_identity:
                             recent_show_fallbacks.add(fallback_identity)
             except Exception as exc:
-                current_app.logger.warning(f"Unable to load recent show identifiers for {user_email}: {exc}")
+                current_app.logger.warning(
+                    "Unable to load recent show identifiers for %s: %s",
+                    redacted_email,
+                    exc,
+                )
             needs_commit = False
 
             for ep in recent_eps:
@@ -365,7 +373,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                 show_title or "Unknown",
                                 show_key_str or fallback_identity or "unknown",
                                 history_status,
-                                user_email,
+                                redacted_email,
                             )
                             has_watched_show = True
                         else:
@@ -377,7 +385,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                     show_title or "Unknown",
                                     item_id,
                                     history_status,
-                                    user_email,
+                                    redacted_email,
                                 )
                                 processed_subscription_fallback_misses.add(dedup_key)
                     if not has_watched_show and has_recent_notification_for_show and fallback_identity:
@@ -394,7 +402,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if prefer_fallback_identity and fallback_identity and fallback_log_needed:
                     current_app.logger.info(
                         "Fallback identity match used for show "
-                        f"{show_title or 'Unknown'} ({fallback_identity}) for {user_email}."
+                        f"{show_title or 'Unknown'} ({fallback_identity}) for {redacted_email}."
                     )
                     fallback_log_needed = False
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
@@ -420,7 +428,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 try:
                     db.session.commit()
                 except Exception as exc:
-                    current_app.logger.warning(f"Failed to backfill show identifiers for {user_email}: {exc}")
+                    current_app.logger.warning(
+                        "Failed to backfill show identifiers for %s: %s",
+                        redacted_email,
+                        exc,
+                    )
                     db.session.rollback()
 
             if watchable:
@@ -571,6 +583,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             # Send email with retry logic
             email_success = _send_email_with_retry(s, msg)
 
+            redacted_email = redact_email(email)
             if email_success:
                 # Log to file
                 user_log = get_user_logger(email)
@@ -580,15 +593,22 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     # Save to database for better tracking
                     _save_notification_to_db(email, ep, ep_payload.get("show_guid"))
 
-                current_app.logger.info(f"✅ Email sent to {email} with {len(eps)} episodes")
+                current_app.logger.info(
+                    "✅ Email sent to %s with %s episodes",
+                    redacted_email,
+                    len(eps),
+                )
                 episodes_desc = ", ".join(
                     f"{payload['episode'].grandparentTitle} "
                     f"S{payload['episode'].parentIndex}E{payload['episode'].index}"
                     for payload in eps
                 )
-                notif_logger.info(f"Sent to {email} | Episodes: {episodes_desc}")
+                notif_logger.info("Sent to %s | Episodes: %s", redacted_email, episodes_desc)
             else:
-                current_app.logger.error(f"❌ Failed to send email to {email} after all retry attempts")
+                current_app.logger.error(
+                    "❌ Failed to send email to %s after all retry attempts",
+                    redacted_email,
+                )
 
         current_app.logger.info("✅ check_new_episodes job completed.")
         scheduler: BaseScheduler = current_app.extensions.get('apscheduler')
@@ -648,7 +668,11 @@ def _save_notification_to_db(
         if normalized_email in notification_cache:
             del notification_cache[normalized_email]
     except Exception as e:
-        current_app.logger.error(f"Failed to save notification to database for {email}: {e}")
+        current_app.logger.error(
+            "Failed to save notification to database for %s: %s",
+            redact_email(email),
+            e,
+        )
         db.session.rollback()
 
 
@@ -887,6 +911,7 @@ def _send_email_with_retry(s: Settings, msg: MIMEMultipart, max_attempts: int = 
 
     Returns True if email was sent successfully, False otherwise.
     """
+    redacted_to = redact_email(msg["To"])
     last_error = None
     for attempt in range(max_attempts):
         try:
@@ -896,7 +921,11 @@ def _send_email_with_retry(s: Settings, msg: MIMEMultipart, max_attempts: int = 
             smtp.send_message(msg)
             smtp.quit()
             if attempt > 0:
-                current_app.logger.info(f"Email to {msg['To']} sent successfully on attempt {attempt + 1}")
+                current_app.logger.info(
+                    "Email to %s sent successfully on attempt %s",
+                    redacted_to,
+                    attempt + 1,
+                )
             return True
         except Exception as e:
             last_error = e
@@ -906,13 +935,20 @@ def _send_email_with_retry(s: Settings, msg: MIMEMultipart, max_attempts: int = 
                     EMAIL_RETRY_MAX_WAIT_SECONDS
                 )
                 current_app.logger.warning(
-                    f"Email send attempt {attempt + 1}/{max_attempts} failed for {msg['To']}: {e}. "
-                    f"Retrying in {wait_time}s..."
+                    "Email send attempt %s/%s failed for %s: %s. Retrying in %ss...",
+                    attempt + 1,
+                    max_attempts,
+                    redacted_to,
+                    e,
+                    wait_time,
                 )
                 time.sleep(wait_time)
             else:
                 current_app.logger.error(
-                    f"Failed to send email to {msg['To']} after {max_attempts} attempts: {e}"
+                    "Failed to send email to %s after %s attempts: %s",
+                    redacted_to,
+                    max_attempts,
+                    e,
                 )
     return False
 
