@@ -32,6 +32,20 @@ def email_to_filename(email: str) -> str:
     return f"{safe_local}_{email_hash}"
 
 
+def redact_email(email: str | None) -> str:
+    """Return a redacted version of an email address for logging."""
+    if not email:
+        return "unknown"
+    normalized = normalize_email(email)
+    if "@" not in normalized:
+        if len(normalized) <= 1:
+            return "***"
+        return f"{normalized[0]}***"
+    local, domain = normalized.split("@", 1)
+    masked_local = f"{local[0]}***" if local else "***"
+    return f"{masked_local}@{domain}"
+
+
 def normalize_show_identity(title: str | None, year: int | None = None) -> str:
     """Create a stable identifier for a show based on title/year."""
     if not title:
