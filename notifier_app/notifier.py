@@ -204,6 +204,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.warning("⚠️ No settings found; skipping.")
             return
 
+        processed_subscription_fallback_misses: Set[Tuple[str, str]] = set()
+
         interval = override_interval_minutes or s.notify_interval or 30
         cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
 
@@ -367,13 +369,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             )
                             has_watched_show = True
                         else:
-                            current_app.logger.info(
-                                "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
-                                show_title or "Unknown",
-                                show_key_str or fallback_identity or "unknown",
-                                history_status,
-                                user_email,
-                            )
+                            item_id = show_key_str or fallback_identity or "unknown"
+                            dedup_key = (canon, item_id)
+                            if dedup_key not in processed_subscription_fallback_misses:
+                                current_app.logger.info(
+                                    "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
+                                    show_title or "Unknown",
+                                    item_id,
+                                    history_status,
+                                    user_email,
+                                )
+                                processed_subscription_fallback_misses.add(dedup_key)
                     if not has_watched_show and has_recent_notification_for_show and fallback_identity:
                         prefer_fallback_identity = True
                         fallback_log_needed = True
