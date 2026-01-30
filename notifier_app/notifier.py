@@ -239,7 +239,7 @@ def reconcile_user_preferences(
             app.logger.warning(f"Preference reconciliation skipped: unable to connect to Plex ({exc}).")
             return
 
-        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+        cutoff_dt = datetime.utcnow() - timedelta(days=cutoff_days)
         last_notification_map: dict[str, tuple[datetime | None, str | None]] = {}
         notification_rows = (
             db.session.query(
@@ -275,6 +275,8 @@ def reconcile_user_preferences(
                     if last_notified:
                         break
 
+            if last_notified and last_notified.tzinfo is not None:
+                last_notified = last_notified.astimezone(timezone.utc).replace(tzinfo=None)
             has_recent_notification = bool(last_notified and last_notified >= cutoff_dt)
             needs_reconcile = (
                 not has_recent_notification
