@@ -39,7 +39,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences, Notification, ShowSubscription, db
+from .config import Settings, UserPreferences, Notification, db
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -215,7 +215,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No users fetched.")
             return
 
-        explicit_subscriptions_enabled = bool(getattr(s, "enable_explicit_subscriptions", False))
         user_eps: Dict[str, List[Episode]] = {}
 
         for user in users:
@@ -240,22 +239,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     db.session.commit()
             if pref and pref.global_opt_out:
                 continue
-
-            subscribed_show_keys: Set[str] = set()
-            subscribed_show_guids: Set[str] = set()
-            subs_by_key: Dict[str, ShowSubscription] = {}
-            subs_by_guid: Dict[str, ShowSubscription] = {}
-            if explicit_subscriptions_enabled:
-                subscriptions = ShowSubscription.query.filter(
-                    ShowSubscription.email.in_([canon, user_email])
-                ).all()
-                for sub in subscriptions:
-                    if sub.show_key:
-                        subscribed_show_keys.add(sub.show_key)
-                        subs_by_key[sub.show_key] = sub
-                    if sub.show_guid:
-                        subscribed_show_guids.add(sub.show_guid)
-                        subs_by_guid[sub.show_guid] = sub
 
             watchable: List[Episode] = []
             recent_notified = _get_recent_notifications(canon)
@@ -293,21 +276,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                if show_guid and show_key_str in subs_by_key:
-                    sub = subs_by_key[show_key_str]
-                    if sub.show_guid != show_guid:
-                        sub.show_guid = show_guid
-                        needs_commit = True
-                if show_guid and show_guid in subs_by_guid:
-                    sub = subs_by_guid[show_guid]
-                    if sub.show_key != show_key_str:
-                        sub.show_key = show_key_str
-                        needs_commit = True
-
-                is_explicitly_subscribed = explicit_subscriptions_enabled and (
-                    (show_guid and show_guid in subscribed_show_guids) or show_key_str in subscribed_show_keys
-                )
-                if not is_explicitly_subscribed and not _user_has_watched_show(s, uid, show_key):
+                if not _user_has_watched_show(s, uid, show_key):
                     continue
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue

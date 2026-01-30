@@ -3,14 +3,13 @@ import re
 import logging
 import threading
 from functools import wraps
-from collections import Counter
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from .config import db, Settings, UserPreferences, Notification, ShowSubscription
+from .config import db, Settings, UserPreferences, Notification
 from .utils import normalize_email, email_to_filename, normalize_show_identity
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
@@ -133,10 +132,6 @@ def create_app():
                 if 'base_url' not in existing_cols:
                     conn.execute(text('ALTER TABLE settings ADD COLUMN base_url VARCHAR'))
                     app.logger.info("Added base_url column to settings table")
-                if 'enable_explicit_subscriptions' not in existing_cols:
-                    conn.execute(text('ALTER TABLE settings ADD COLUMN enable_explicit_subscriptions BOOLEAN DEFAULT 0'))
-                    app.logger.info("Added enable_explicit_subscriptions column to settings table")
-
         # Migrate user_preferences table to add unique constraint if it doesn't exist
         if 'user_preferences' in inspector.get_table_names():
             try:
@@ -163,12 +158,6 @@ def create_app():
                 if 'show_guid' not in existing_cols:
                     conn.execute(text('ALTER TABLE user_preferences ADD COLUMN show_guid VARCHAR'))
                     app.logger.info("Added show_guid column to user_preferences table")
-            if 'show_subscriptions' in inspector.get_table_names():
-                existing_cols = {c['name'] for c in inspector.get_columns('show_subscriptions')}
-                if 'show_guid' not in existing_cols:
-                    conn.execute(text('ALTER TABLE show_subscriptions ADD COLUMN show_guid VARCHAR'))
-                    app.logger.info("Added show_guid column to show_subscriptions table")
-
         # Backfill show_guid for existing notifications and preferences
         try:
             notifications = Notification.query.filter(Notification.show_guid.is_(None)).all()
@@ -186,18 +175,10 @@ def create_app():
                 UserPreferences.show_guid.is_(None),
                 UserPreferences.show_key.isnot(None)
             ).all()
-            subs = ShowSubscription.query.filter(
-                ShowSubscription.show_guid.is_(None),
-                ShowSubscription.show_key.isnot(None)
-            ).all()
             updates = False
             for pref in prefs:
                 if pref.show_key in show_guid_map:
                     pref.show_guid = show_guid_map[pref.show_key]
-                    updates = True
-            for sub in subs:
-                if sub.show_key in show_guid_map:
-                    sub.show_guid = show_guid_map[sub.show_key]
                     updates = True
             if updates:
                 db.session.commit()
@@ -212,7 +193,6 @@ def create_app():
                 plex_url="http://localhost:32400",
                 plex_token="placeholder",
                 notify_interval=30,
-                enable_explicit_subscriptions=False,
             )
             db.session.add(s)
             db.session.commit()
@@ -370,7 +350,6 @@ def create_app():
 
             global_opt_out = bool(request.form.get("global_opt_out"))
             show_optouts = request.form.getlist("show_optouts")
-            show_subscriptions = request.form.getlist("show_subscriptions")
             visible_shows = request.form.getlist("visible_shows")  # Track shows on current page
             visible_show_ids = []
             visible_show_keys = []
@@ -402,14 +381,6 @@ def create_app():
                     UserPreferences.email.in_([canon, email]),
                     UserPreferences.show_guid.in_(visible_show_ids)
                 ).delete(synchronize_session=False)
-                ShowSubscription.query.filter(
-                    ShowSubscription.email.in_([canon, email]),
-                    ShowSubscription.show_key.in_(visible_show_keys)
-                ).delete(synchronize_session=False)
-                ShowSubscription.query.filter(
-                    ShowSubscription.email.in_([canon, email]),
-                    ShowSubscription.show_guid.in_(visible_show_ids)
-                ).delete(synchronize_session=False)
 
             # Add opt-outs for checked shows
             for show_value in show_optouts:
@@ -429,24 +400,6 @@ def create_app():
                         show_guid=show_id or None,
                         show_key=show_key,
                         show_opt_out=True
-                    ))
-
-            # Add explicit subscriptions for checked shows
-            for show_value in show_subscriptions:
-                show_id, show_key = _parse_show_token(show_value)
-                sub = None
-                if show_id:
-                    sub = ShowSubscription.query.filter_by(email=canon, show_guid=show_id).first()
-                if not sub and show_key:
-                    sub = ShowSubscription.query.filter_by(email=canon, show_key=show_key).first()
-                if sub:
-                    sub.show_key = show_key or sub.show_key
-                    sub.show_guid = show_id or sub.show_guid
-                else:
-                    db.session.add(ShowSubscription(
-                        email=canon,
-                        show_guid=show_id or None,
-                        show_key=show_key
                     ))
 
             db.session.commit()
@@ -544,20 +497,7 @@ def create_app():
                 prefs_updated = True
             opted_out_shows.add(show_id or pref.show_key)
 
-        subscriptions = ShowSubscription.query.filter(
-            ShowSubscription.email.in_([canon, email])
-        ).all()
-        subscribed_shows = set()
-        subs_updated = False
-        for sub in subscriptions:
-            show_id = sub.show_guid
-            if not show_id and sub.show_key in show_key_to_id:
-                show_id = show_key_to_id[sub.show_key]
-                sub.show_guid = show_id
-                subs_updated = True
-            subscribed_shows.add(show_id or sub.show_key)
-
-        if prefs_updated or subs_updated:
+        if prefs_updated:
             db.session.commit()
 
         # Build list of shows with their opt-out status and last notification date
@@ -582,7 +522,6 @@ def create_app():
                 'show_guid': info.get('show_guid') or "",
                 'title': info['title'],
                 'opted_out': key in opted_out_shows,
-                'subscribed': key in subscribed_shows,
                 'last_notified': info['last_notified']
             })
 
@@ -623,7 +562,6 @@ def create_app():
             global_opt_out=global_opt_out,
             shows=paginated_shows,
             opted_out_shows=opted_out_shows,
-            subscribed_shows=subscribed_shows,
             page=page,
             total_pages=total_pages,
             show_inactive=show_inactive,

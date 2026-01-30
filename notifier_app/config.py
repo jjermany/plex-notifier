@@ -17,7 +17,6 @@ class Settings(db.Model):
     notify_new_episodes = db.Column(db.Boolean, default=True)
     notify_interval   = db.Column(db.Integer, nullable=False, default=30)
     base_url          = db.Column(db.String)  # 👈 New line
-    enable_explicit_subscriptions = db.Column(db.Boolean, default=False)
 
 
 class UserPreferences(db.Model):
@@ -58,22 +57,6 @@ class Notification(db.Model):
         db.Index('idx_email_timestamp', 'email', 'timestamp'),
         db.Index('idx_show_key_season_episode', 'show_key', 'season', 'episode'),
         db.Index('idx_show_guid', 'show_guid'),
-    )
-
-
-class ShowSubscription(db.Model):
-    __tablename__ = 'show_subscriptions'
-
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String, nullable=False, index=True)
-    show_key = db.Column(db.String, nullable=False, index=True)
-    show_guid = db.Column(db.String, nullable=True, index=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    __table_args__ = (
-        db.UniqueConstraint('email', 'show_key', name='uq_subscription_email_show_key'),
-        db.Index('idx_subscription_email_show_key', 'email', 'show_key'),
-        db.Index('idx_subscription_email_show_guid', 'email', 'show_guid'),
     )
 
 

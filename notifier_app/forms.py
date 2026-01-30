@@ -49,7 +49,6 @@ class SettingsForm(FlaskForm):
     smtp_pass          = StringField('SMTP Password', validators=[Optional()])
     from_address       = StringField('From Email', validators=[Optional(), Email()])
     notify_new_episodes= BooleanField('Notify on new episodes')
-    enable_explicit_subscriptions = BooleanField('Allow explicit show subscriptions')
     submit             = SubmitField('Save Settings')
     notify_interval    = IntegerField(
         'Poll interval (minutes)',
