@@ -39,7 +39,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences, Notification, db
+from .config import Settings, UserPreferences, Notification, ShowSubscription, db
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -200,6 +200,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No users fetched.")
             return
 
+        explicit_subscriptions_enabled = bool(getattr(s, "enable_explicit_subscriptions", False))
         user_eps: Dict[str, List[Episode]] = {}
 
         for user in users:
@@ -225,6 +226,14 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             if pref and pref.global_opt_out:
                 continue
 
+            subscribed_show_keys: Set[str] = set()
+            if explicit_subscriptions_enabled:
+                subscribed_show_keys = {
+                    sub.show_key for sub in ShowSubscription.query.filter(
+                        ShowSubscription.email.in_([canon, user_email])
+                    ).all()
+                }
+
             watchable: List[Episode] = []
             recent_notified = _get_recent_notifications(canon)
 
@@ -243,7 +252,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                if not _user_has_watched_show(s, uid, show_key):
+                is_explicitly_subscribed = explicit_subscriptions_enabled and str(show_key) in subscribed_show_keys
+                if not is_explicitly_subscribed and not _user_has_watched_show(s, uid, show_key):
                     continue
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue

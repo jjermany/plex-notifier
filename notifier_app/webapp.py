@@ -10,7 +10,7 @@ from flask import Flask, render_template, redirect, url_for, flash, request, Res
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from .config import db, Settings, UserPreferences, Notification
+from .config import db, Settings, UserPreferences, Notification, ShowSubscription
 from .utils import normalize_email, email_to_filename
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm
 from .constants import (
@@ -130,6 +130,9 @@ def create_app():
                 if 'base_url' not in existing_cols:
                     conn.execute(text('ALTER TABLE settings ADD COLUMN base_url VARCHAR'))
                     app.logger.info("Added base_url column to settings table")
+                if 'enable_explicit_subscriptions' not in existing_cols:
+                    conn.execute(text('ALTER TABLE settings ADD COLUMN enable_explicit_subscriptions BOOLEAN DEFAULT 0'))
+                    app.logger.info("Added enable_explicit_subscriptions column to settings table")
 
         # Migrate user_preferences table to add unique constraint if it doesn't exist
         if 'user_preferences' in inspector.get_table_names():
@@ -151,7 +154,8 @@ def create_app():
             s = Settings(
                 plex_url="http://localhost:32400",
                 plex_token="placeholder",
-                notify_interval=30
+                notify_interval=30,
+                enable_explicit_subscriptions=False,
             )
             db.session.add(s)
             db.session.commit()
@@ -274,6 +278,7 @@ def create_app():
         if request.method == "POST":
             global_opt_out = bool(request.form.get("global_opt_out"))
             show_optouts = request.form.getlist("show_optouts")
+            show_subscriptions = request.form.getlist("show_subscriptions")
             visible_shows = request.form.getlist("visible_shows")  # Track shows on current page
 
             pref = UserPreferences.query.filter_by(email=canon, show_key=None).first()
@@ -293,10 +298,18 @@ def create_app():
                     UserPreferences.email.in_([canon, email]),
                     UserPreferences.show_key.in_(visible_shows)
                 ).delete(synchronize_session=False)
+                ShowSubscription.query.filter(
+                    ShowSubscription.email.in_([canon, email]),
+                    ShowSubscription.show_key.in_(visible_shows)
+                ).delete(synchronize_session=False)
 
             # Add opt-outs for checked shows
             for show_key in show_optouts:
                 db.session.add(UserPreferences(email=canon, show_key=show_key, show_opt_out=True))
+
+            # Add explicit subscriptions for checked shows
+            for show_key in show_subscriptions:
+                db.session.add(ShowSubscription(email=canon, show_key=show_key))
 
             db.session.commit()
             flash("Preferences updated.", "success")
@@ -313,6 +326,11 @@ def create_app():
         ).all()
         global_opt_out = any(p.global_opt_out for p in user_prefs if p.show_key is None)
         opted_out_shows = {p.show_key for p in user_prefs if p.show_key}
+        subscribed_shows = {
+            s.show_key for s in ShowSubscription.query.filter(
+                ShowSubscription.email.in_([canon, email])
+            ).all()
+        }
 
         # Get shows from database notifications (primary source) with last notification date
         show_map = {}  # key -> {title, last_notified} mapping
@@ -379,6 +397,7 @@ def create_app():
                 'key': key,
                 'title': info['title'],
                 'opted_out': key in opted_out_shows,
+                'subscribed': key in subscribed_shows,
                 'last_notified': info['last_notified']
             })
 
@@ -419,6 +438,7 @@ def create_app():
             global_opt_out=global_opt_out,
             shows=paginated_shows,
             opted_out_shows=opted_out_shows,
+            subscribed_shows=subscribed_shows,
             page=page,
             total_pages=total_pages,
             show_inactive=show_inactive,
