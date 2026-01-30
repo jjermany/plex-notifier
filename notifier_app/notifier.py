@@ -40,6 +40,7 @@ from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
 from .config import Settings, UserPreferences, Notification, db
+from sqlalchemy import or_
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -346,9 +347,34 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                has_watched_show = _user_has_watched_show(s, uid, show_key, fallback_identity)
+                has_watched_show, history_status = _user_has_watched_show(s, uid, show_key, fallback_identity)
                 if not has_watched_show:
-                    if has_recent_notification_for_show and fallback_identity:
+                    if history_status in {"empty", "error"}:
+                        has_subscription = _user_has_subscription_fallback(
+                            canon,
+                            user_email,
+                            show_key_str,
+                            raw_show_guid,
+                            fallback_identity,
+                        )
+                        if has_subscription:
+                            current_app.logger.info(
+                                "Using subscription fallback for %s (%s) because Tautulli history was %s for %s.",
+                                show_title or "Unknown",
+                                show_key_str or fallback_identity or "unknown",
+                                history_status,
+                                user_email,
+                            )
+                            has_watched_show = True
+                        else:
+                            current_app.logger.info(
+                                "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
+                                show_title or "Unknown",
+                                show_key_str or fallback_identity or "unknown",
+                                history_status,
+                                user_email,
+                            )
+                    if not has_watched_show and has_recent_notification_for_show and fallback_identity:
                         prefer_fallback_identity = True
                         fallback_log_needed = True
                         show_guid = _get_show_guid_for_episode(
@@ -357,7 +383,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             prefer_fallback_identity=prefer_fallback_identity,
                         )
                         has_watched_show = True
-                    else:
+                    if not has_watched_show:
                         continue
                 if prefer_fallback_identity and fallback_identity and fallback_log_needed:
                     current_app.logger.info(
@@ -738,12 +764,42 @@ def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
         return False
 
 
+def _user_has_subscription_fallback(
+    email: str,
+    alternate_email: Optional[str],
+    show_key: Optional[str],
+    show_guid: Optional[str],
+    fallback_identity: Optional[str],
+) -> bool:
+    candidates = [candidate for candidate in (show_guid, show_key, fallback_identity) if candidate]
+    if not candidates:
+        return False
+
+    emails = [email]
+    if alternate_email and alternate_email not in emails:
+        emails.append(alternate_email)
+
+    preference = (
+        UserPreferences.query
+        .filter(
+            UserPreferences.email.in_(emails),
+            UserPreferences.show_opt_out.is_(False),
+            or_(
+                UserPreferences.show_key.in_(candidates),
+                UserPreferences.show_guid.in_(candidates),
+            ),
+        )
+        .first()
+    )
+    return preference is not None
+
+
 def _user_has_watched_show(
     s: Settings,
     user_id: int,
     grandparent_rating_key: Any,
     fallback_identity: Optional[str] = None,
-) -> bool:
+) -> Tuple[bool, str]:
     def _is_affirmative_watched(value: Any) -> bool:
         if value is None:
             return False
@@ -769,6 +825,7 @@ def _user_has_watched_show(
         start = 0
         grandparent_key_str = str(grandparent_rating_key) if grandparent_rating_key is not None else ""
 
+        history_found = False
         while True:
             params = {
                 'apikey': s.tautulli_api_key,
@@ -784,20 +841,22 @@ def _user_has_watched_show(
 
             payload = resp.json().get('response', {}).get('data', {})
             history = payload.get('data') or []
+            if history:
+                history_found = True
 
             for item in history:
                 watched_status = item.get('watched_status')
                 gp_key = str(item.get('grandparent_rating_key'))
                 if grandparent_rating_key is not None and gp_key == grandparent_key_str:
                     if _is_affirmative_watched(watched_status):
-                        return True
+                        return True, "available"
                 if fallback_identity:
                     item_identity = normalize_show_identity(
                         item.get('grandparent_title'),
                         item.get('grandparent_year') or item.get('year'),
                     )
                     if item_identity == fallback_identity and _is_affirmative_watched(watched_status):
-                        return True
+                        return True, "available"
 
             records_filtered = payload.get('recordsFiltered')
             if not history:
@@ -809,10 +868,12 @@ def _user_has_watched_show(
 
             start = consumed
 
-        return False
+        if history_found:
+            return False, "available"
+        return False, "empty"
     except Exception as e:
         current_app.logger.error(f"Error checking show history for user {user_id}: {e}")
-        return False
+        return False, "error"
 
 
 def _send_email_with_retry(s: Settings, msg: MIMEMultipart, max_attempts: int = EMAIL_RETRY_ATTEMPTS) -> bool:
