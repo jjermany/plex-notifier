@@ -278,11 +278,54 @@ def reconcile_user_preferences(
             if last_notified and last_notified.tzinfo is not None:
                 last_notified = last_notified.astimezone(timezone.utc).replace(tzinfo=None)
             has_recent_notification = bool(last_notified and last_notified >= cutoff_dt)
+            title_from_notification = None
+            year_from_notification = None
+            if show_title:
+                title_from_notification, year_from_notification = _extract_show_year_from_title(show_title)
+            has_mismatched_pair = (pref.show_key is None) != (pref.show_guid is None)
             needs_reconcile = (
                 not has_recent_notification
-                or pref.show_key is None
+                or has_mismatched_pair
                 or (pref.show_guid and pref.show_guid.startswith("title:"))
             )
+
+            search_results = None
+            if not needs_reconcile and title_from_notification:
+                try:
+                    if year_from_notification:
+                        search_results = tv_section.search(
+                            title=title_from_notification,
+                            year=year_from_notification,
+                            libtype="show",
+                        )
+                    else:
+                        search_results = tv_section.search(
+                            title=title_from_notification,
+                            libtype="show",
+                        )
+                except Exception as exc:
+                    app.logger.warning(
+                        "Preference reconciliation consistency check failed for '%s': %s",
+                        title_from_notification,
+                        exc,
+                    )
+                    search_results = None
+
+                if search_results:
+                    result_keys = {
+                        str(getattr(show, "ratingKey"))
+                        for show in search_results
+                        if getattr(show, "ratingKey", None)
+                    }
+                    result_guids = {
+                        guid
+                        for show in search_results
+                        if (guid := _extract_show_guid_from_metadata(show))
+                    }
+                    if (pref.show_key and str(pref.show_key) not in result_keys) or (
+                        pref.show_guid and str(pref.show_guid) not in result_guids
+                    ):
+                        needs_reconcile = True
 
             if not needs_reconcile:
                 continue
@@ -290,8 +333,8 @@ def reconcile_user_preferences(
             scanned_count += 1
 
             title, year = _parse_fallback_identity(pref.show_guid)
-            if not title and show_title:
-                title, year = _extract_show_year_from_title(show_title)
+            if not title and title_from_notification:
+                title, year = title_from_notification, year_from_notification
             if not title and pref.show_key:
                 fetched_item = None
                 try:
@@ -327,10 +370,11 @@ def reconcile_user_preferences(
                     updated_count += 1
                 continue
             try:
-                if year:
-                    search_results = tv_section.search(title=title, year=year, libtype="show")
-                else:
-                    search_results = tv_section.search(title=title, libtype="show")
+                if search_results is None:
+                    if year:
+                        search_results = tv_section.search(title=title, year=year, libtype="show")
+                    else:
+                        search_results = tv_section.search(title=title, libtype="show")
             except Exception as exc:
                 app.logger.warning(f"Preference reconciliation search failed for '{title}': {exc}")
                 continue
