@@ -251,6 +251,24 @@
       <!-- Poll Interval Card -->
       <div class="card mb-4">
         <div class="card-header">
+          <i class="bi bi-bell-fill"></i> Subscription Behavior
+        </div>
+        <div class="card-body">
+          <div class="form-check form-switch">
+            {{ form.enable_explicit_subscriptions(class="form-check-input", id="enable_explicit_subscriptions") }}
+            <label class="form-check-label text-white ms-2" for="enable_explicit_subscriptions">
+              Allow explicit show subscriptions
+            </label>
+          </div>
+          <div class="form-text text-light mt-2">
+            <i class="bi bi-info-circle"></i> When enabled, users can opt into shows directly from the subscriptions page, even if they have not watched them yet.
+          </div>
+        </div>
+      </div>
+
+      <!-- Poll Interval Card -->
+      <div class="card mb-4">
+        <div class="card-header">
           <i class="bi bi-arrow-repeat"></i> Polling Interval
         </div>
         <div class="card-body">
