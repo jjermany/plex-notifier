@@ -24,6 +24,7 @@ from .constants import (
     EMAIL_RETRY_MAX_WAIT_SECONDS,
     USER_LOG_MAX_BYTES,
     GLOBAL_LOG_MAX_BYTES,
+    APP_LOG_MAX_BYTES,
     LOG_BACKUP_COUNT,
     TAUTULLI_MAX_PAGE_LENGTH,
     API_RETRY_ATTEMPTS,
@@ -53,6 +54,14 @@ notif_handler = RotatingFileHandler(notif_log_path, maxBytes=GLOBAL_LOG_MAX_BYTE
 notif_handler.setFormatter(TZFormatter('%(asctime)s | %(message)s'))
 notif_logger.addHandler(notif_handler)
 notif_logger.propagate = False  # ✅ Prevent log from appearing in Unraid console
+
+app_logger = logging.getLogger("plex_notifier")
+app_logger.setLevel(logging.INFO)
+app_log_path = os.path.join(notif_log_dir, "app.log")
+app_handler = RotatingFileHandler(app_log_path, maxBytes=APP_LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
+app_handler.setFormatter(TZFormatter('%(asctime)s | %(levelname)s | %(name)s | %(message)s'))
+app_logger.addHandler(app_handler)
+app_logger.propagate = False
 
 # Common affirmative values returned by Tautulli for watched history entries
 AFFIRMATIVE_WATCHED_STATUSES: Set[str] = {

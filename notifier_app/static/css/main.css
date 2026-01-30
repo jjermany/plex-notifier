@@ -405,6 +405,46 @@ body.auth-page::before {
   user-select: none;
 }
 
+/* ========== Log Viewer ========== */
+.log-viewer {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  max-height: 320px;
+  overflow: hidden;
+}
+
+.log-output {
+  margin: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  color: #f3f3f3;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-output::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-output::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.log-output::-webkit-scrollbar-thumb {
+  background: var(--plex-orange);
+  border-radius: 4px;
+}
+
+.log-output::-webkit-scrollbar-thumb:hover {
+  background: var(--plex-gold);
+}
+
 /* ========== Stats Lists ========== */
 .stats-list {
   list-style: none;
