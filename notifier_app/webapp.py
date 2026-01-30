@@ -103,7 +103,16 @@ def create_app():
         SECRET_KEY=secret_key,
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{db_path}",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=timedelta(
+            hours=int(os.environ.get("SESSION_LIFETIME_HOURS", "12"))
+        ),
     )
+
+    session_cookie_secure = os.environ.get("SESSION_COOKIE_SECURE")
+    if session_cookie_secure is not None:
+        app.config["SESSION_COOKIE_SECURE"] = session_cookie_secure.lower() == "true"
 
     # Initialize rate limiter
     limiter = Limiter(
@@ -217,6 +226,7 @@ def create_app():
                 username == os.environ.get("WEBUI_USER")
                 and password == os.environ.get("WEBUI_PASS")
             ):
+                session.permanent = True
                 session["admin_authed"] = True
                 redirect_target = form.next.data or url_for("history")
                 if not _is_safe_next_url(redirect_target):
