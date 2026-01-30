@@ -299,6 +299,11 @@ def create_app():
 
         return render_template('settings.html', form=form, test_form=test_form, manual_check_form=manual_check_form)
 
+    @app.route('/log-viewer')
+    @requires_auth
+    def log_viewer():
+        return render_template('log_viewer.html')
+
     @app.route('/test-email', methods=['POST'])
     @requires_auth
     @limiter.limit(RATE_LIMIT_TEST_EMAIL)
@@ -364,7 +369,7 @@ def create_app():
             time_desc = f"{int(hours / 24)} days"
 
         flash(f'✅ Manual check started (looking back {time_desc})! You will be notified if there are new episodes.', 'info')
-        return redirect(url_for('settings'))
+        return redirect(url_for('log_viewer'))
 
     @app.route('/subscriptions', methods=['GET', 'POST'])
     def subscriptions():
