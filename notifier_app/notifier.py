@@ -1042,9 +1042,8 @@ def _user_has_subscription_fallback(
             return False, []
         return True, active_preferences
 
-    cleaned_title, extracted_year = _extract_show_year_from_title(show_title)
-    normalized_title = _normalize_title_for_match(cleaned_title)
-    episode_year = show_year or extracted_year
+    cleaned_title, _ = _extract_show_year_from_title(show_title)
+    normalized_title = _normalize_title_for_match(cleaned_title or show_title)
     if normalized_title:
         title_preferences = (
             UserPreferences.query
@@ -1062,9 +1061,7 @@ def _user_has_subscription_fallback(
             stored_normalized = _normalize_title_for_match(stored_title)
             if not stored_normalized or stored_normalized != normalized_title:
                 continue
-            if stored_year is not None and episode_year is not None and stored_year != episode_year:
-                continue
-            if stored_year is not None and episode_year is None:
+            if show_year is not None and stored_year != show_year:
                 continue
             if preference.show_opt_out:
                 opted_out_matches += 1
