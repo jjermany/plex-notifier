@@ -81,12 +81,6 @@ def create_app():
         for existing in root_logger.handlers
     ):
         root_logger.addHandler(app_file_handler)
-    if not any(
-        isinstance(existing, RotatingFileHandler)
-        and getattr(existing, "baseFilename", None) == app_log_path
-        for existing in app.logger.handlers
-    ):
-        app.logger.addHandler(app_file_handler)
 
     @app.route('/media/<path:filename>')
     def media_file(filename):
