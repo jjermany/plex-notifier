@@ -38,6 +38,15 @@
             </a>
           </li>
         </ul>
+        <ul class="navbar-nav ms-auto">
+          {% if session.get("admin_authed") %}
+          <li class="nav-item">
+            <a href="{{ url_for('logout') }}" class="nav-link">
+              <i class="bi bi-box-arrow-right"></i> Log out
+            </a>
+          </li>
+          {% endif %}
+        </ul>
       </div>
     </div>
   </nav>
