@@ -376,7 +376,13 @@ function initLogViewer() {
         throw new Error(`Unexpected response: ${response.status}`);
       }
       const data = await response.json();
-      offset = Number.isFinite(data.offset) ? data.offset : offset;
+      const nextOffset = Number.isFinite(data.offset) ? data.offset : offset;
+      const fileSize = Number.isFinite(data.file_size) ? data.file_size : null;
+      if ((fileSize !== null && fileSize < offset) || nextOffset < offset) {
+        logOutput.textContent = '';
+        pendingLine = '';
+      }
+      offset = nextOffset;
       let lines = Array.isArray(data.lines) ? data.lines : [];
       if (pendingLine) {
         if (lines.length) {
@@ -655,6 +661,8 @@ function initPage() {
 
   if (path === '/' || path.includes('settings')) {
     initSettingsPage();
+  } else if (path.includes('log-viewer')) {
+    initLogViewer();
   } else if (path.includes('history')) {
     initHistoryPage();
   } else if (path.includes('subscriptions')) {
