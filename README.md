@@ -19,7 +19,7 @@ Built with Docker, designed for Unraid, and powered by Tautulli.
   - Email (SMTP) settings
   - Notification interval
 - ✅ Users can unsubscribe globally or per-show (Beta)
-- 🔐 Optional HTTP Basic Auth for admin access
+- 🔐 Optional admin login screen for admin access
 - 📄 Per-user logs stored locally for review (Beta)
 - ♻️ Skips duplicate notifications by tracking each user's last 200 alerts
 - 🐳 Runs cleanly in Docker with Unraid support
@@ -68,13 +68,16 @@ docker run -d \
 
 ## 🔒 Authentication
 
-HTTP Basic Auth is optional but recommended.
-Set the following environment variables:
+The admin login screen is optional but recommended.
+Set the following environment variables to enable the login form:
 
 ```env
 WEBUI_USER=yourusername
 WEBUI_PASS=yourpassword
 ```
+
+When set, the Web UI redirects to a login page at `/login`, and a session cookie is used after successful sign-in.
+The `WEBUI_USER` and `WEBUI_PASS` values are the exact credentials users must enter on the login form.
 
 ---
 
@@ -191,4 +194,3 @@ After starting the container, navigate to the Web UI (e.g. `http://localhost:500
 If you find Plex Notifier helpful, consider supporting the project:
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-%23FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jermcee)
-
