@@ -1,9 +1,15 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, IntegerField, BooleanField, SubmitField, SelectField
+from wtforms import StringField, IntegerField, BooleanField, SubmitField, SelectField, PasswordField, HiddenField
 from wtforms.validators import DataRequired, URL, Optional, Email
 from wtforms import EmailField
 from wtforms import IntegerField
 from wtforms.validators import NumberRange
+
+class LoginForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    next = HiddenField()
+    submit = SubmitField('Log In')
 
 class TestEmailForm(FlaskForm):
     test_email = EmailField(
