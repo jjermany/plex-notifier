@@ -1093,7 +1093,7 @@ def _user_has_subscription_fallback(
             stored_normalized = _normalize_title_for_match(stored_title)
             if not stored_normalized or stored_normalized != normalized_title:
                 continue
-            if show_year is not None and stored_year != show_year:
+            if show_year is not None and stored_year is not None and stored_year != show_year:
                 continue
             if preference.show_opt_out:
                 opted_out_matches += 1
