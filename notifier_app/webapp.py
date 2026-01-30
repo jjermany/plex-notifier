@@ -5,7 +5,8 @@ import threading
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory
+from logging.handlers import RotatingFileHandler
+from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
@@ -21,7 +22,12 @@ from .constants import (
 )
 from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
 from .logging_utils import TZFormatter
-from .constants import RATE_LIMIT_TEST_EMAIL, RATE_LIMIT_MANUAL_CHECK
+from .constants import (
+    RATE_LIMIT_TEST_EMAIL,
+    RATE_LIMIT_MANUAL_CHECK,
+    APP_LOG_MAX_BYTES,
+    LOG_BACKUP_COUNT,
+)
 from sqlalchemy import inspect, text
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
@@ -59,6 +65,28 @@ def create_app():
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(logging.DEBUG)
+    log_dir = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs"))
+    os.makedirs(log_dir, exist_ok=True)
+    app_log_path = os.path.join(log_dir, "app.log")
+    app_file_handler = RotatingFileHandler(
+        app_log_path,
+        maxBytes=APP_LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+    )
+    app_file_handler.setFormatter(TZFormatter(log_format))
+    root_logger = logging.getLogger()
+    if not any(
+        isinstance(existing, RotatingFileHandler)
+        and getattr(existing, "baseFilename", None) == app_log_path
+        for existing in root_logger.handlers
+    ):
+        root_logger.addHandler(app_file_handler)
+    if not any(
+        isinstance(existing, RotatingFileHandler)
+        and getattr(existing, "baseFilename", None) == app_log_path
+        for existing in app.logger.handlers
+    ):
+        app.logger.addHandler(app_file_handler)
 
     @app.route('/media/<path:filename>')
     def media_file(filename):
@@ -631,6 +659,48 @@ def create_app():
                 'status': 'unhealthy',
                 'error': str(e)
             }, 500
+
+    @app.route('/api/admin/logs')
+    @requires_auth
+    def admin_logs():
+        log_path = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs", "app.log"))
+        try:
+            offset = int(request.args.get("offset", "0"))
+        except ValueError:
+            offset = 0
+        max_bytes = 50_000
+        try:
+            requested_max = int(request.args.get("max_bytes", max_bytes))
+            max_bytes = max(1_000, min(requested_max, 200_000))
+        except ValueError:
+            pass
+
+        if not os.path.exists(log_path):
+            return jsonify({
+                "lines": ["Log file not available yet."],
+                "offset": 0,
+                "file_size": 0,
+                "ends_with_newline": True,
+            })
+
+        file_size = os.path.getsize(log_path)
+        if offset < 0 or offset > file_size:
+            offset = 0
+
+        with open(log_path, "rb") as log_file:
+            log_file.seek(offset)
+            chunk = log_file.read(max_bytes)
+            new_offset = log_file.tell()
+
+        decoded = chunk.decode("utf-8", errors="replace")
+        lines = decoded.splitlines()
+        ends_with_newline = chunk.endswith(b"\n")
+        return jsonify({
+            "lines": lines,
+            "offset": new_offset,
+            "file_size": file_size,
+            "ends_with_newline": ends_with_newline,
+        })
 
     @app.route('/')
     @requires_auth

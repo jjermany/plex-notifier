@@ -321,6 +321,37 @@
       </div>
     </div>
 
+    <!-- Live Log Viewer Card -->
+    <div class="card mb-4" id="log-viewer-card">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-terminal-fill"></i> Live App Logs</span>
+        <span class="badge bg-warning" id="logStatusBadge">Connecting</span>
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+          <button type="button" class="btn btn-outline-light btn-sm" id="logStartBtn">
+            <i class="bi bi-play-fill"></i> Start
+          </button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="logStopBtn" disabled>
+            <i class="bi bi-pause-fill"></i> Pause
+          </button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="logClearBtn">
+            <i class="bi bi-x-circle"></i> Clear
+          </button>
+          <div class="form-check form-switch ms-auto">
+            <input class="form-check-input" type="checkbox" id="logAutoScroll" checked>
+            <label class="form-check-label text-light" for="logAutoScroll">Auto-scroll</label>
+          </div>
+        </div>
+        <div class="log-viewer">
+          <pre id="logOutput" class="log-output" aria-live="polite"></pre>
+        </div>
+        <div class="form-text text-light mt-2">
+          <i class="bi bi-info-circle"></i> Streaming the server application log (admin-only).
+        </div>
+      </div>
+    </div>
+
     <!-- Test Email Card -->
     <div class="card mb-4">
       <div class="card-header">

@@ -38,6 +38,7 @@ API_RETRY_MAX_WAIT_SECONDS = 10
 # Log file settings
 USER_LOG_MAX_BYTES = 500_000  # 500KB per user log file
 GLOBAL_LOG_MAX_BYTES = 100_000  # 100KB for global notifications log
+APP_LOG_MAX_BYTES = 250_000  # 250KB for app log file
 LOG_BACKUP_COUNT = 1
 
 # Tautulli API pagination

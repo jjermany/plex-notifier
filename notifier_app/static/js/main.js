@@ -278,6 +278,8 @@ function initSettingsPage() {
     });
   }
 
+  initLogViewer();
+
   // Add real-time validation for email fields
   const emailFields = document.querySelectorAll('input[type="email"], input[name*="email"]');
   emailFields.forEach(field => {
@@ -313,6 +315,119 @@ function initSettingsPage() {
       }
     });
   });
+}
+
+/**
+ * Initialize the live log viewer on the settings page
+ */
+function initLogViewer() {
+  const logOutput = document.getElementById('logOutput');
+  if (!logOutput) return;
+
+  const startBtn = document.getElementById('logStartBtn');
+  const stopBtn = document.getElementById('logStopBtn');
+  const clearBtn = document.getElementById('logClearBtn');
+  const statusBadge = document.getElementById('logStatusBadge');
+  const autoScrollToggle = document.getElementById('logAutoScroll');
+  const POLL_INTERVAL_MS = 2000;
+  const MAX_LINES = 500;
+  let offset = 0;
+  let pollTimer = null;
+  let pendingLine = '';
+
+  const setStatus = (state, text) => {
+    if (!statusBadge) return;
+    statusBadge.textContent = text;
+    statusBadge.classList.remove('bg-success', 'bg-warning', 'bg-secondary');
+    if (state === 'connected') {
+      statusBadge.classList.add('bg-success');
+    } else if (state === 'paused') {
+      statusBadge.classList.add('bg-secondary');
+    } else {
+      statusBadge.classList.add('bg-warning');
+    }
+  };
+
+  const trimLines = () => {
+    const lines = logOutput.textContent.split('\n');
+    if (lines.length > MAX_LINES) {
+      logOutput.textContent = lines.slice(-MAX_LINES).join('\n');
+    }
+  };
+
+  const appendLines = (lines) => {
+    if (!lines || !lines.length) return;
+    const content = lines.join('\n');
+    if (logOutput.textContent) {
+      logOutput.textContent += `\n${content}`;
+    } else {
+      logOutput.textContent = content;
+    }
+    trimLines();
+    if (autoScrollToggle?.checked) {
+      logOutput.scrollTop = logOutput.scrollHeight;
+    }
+  };
+
+  const fetchLogs = async () => {
+    try {
+      const response = await fetch(`/api/admin/logs?offset=${offset}`);
+      if (!response.ok) {
+        throw new Error(`Unexpected response: ${response.status}`);
+      }
+      const data = await response.json();
+      offset = Number.isFinite(data.offset) ? data.offset : offset;
+      let lines = Array.isArray(data.lines) ? data.lines : [];
+      if (pendingLine) {
+        if (lines.length) {
+          lines[0] = `${pendingLine}${lines[0]}`;
+        } else {
+          lines = [pendingLine];
+        }
+        pendingLine = '';
+      }
+      if (!data.ends_with_newline && lines.length) {
+        pendingLine = lines.pop();
+      }
+      appendLines(lines);
+      setStatus('connected', 'Live');
+    } catch (error) {
+      setStatus('error', 'Disconnected');
+    }
+  };
+
+  const startPolling = () => {
+    if (pollTimer) return;
+    fetchLogs();
+    pollTimer = setInterval(fetchLogs, POLL_INTERVAL_MS);
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+  };
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    setStatus('paused', 'Paused');
+  };
+
+  if (startBtn) {
+    startBtn.addEventListener('click', startPolling);
+  }
+  if (stopBtn) {
+    stopBtn.addEventListener('click', stopPolling);
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      logOutput.textContent = '';
+      pendingLine = '';
+    });
+  }
+
+  startPolling();
 }
 
 // ========== History Page Functions ==========
