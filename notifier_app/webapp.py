@@ -660,6 +660,7 @@ def create_app():
             }, 500
 
     @app.route('/api/admin/logs')
+    @limiter.limit("3600 per hour")
     @requires_auth
     def admin_logs():
         log_path = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs", "app.log"))
