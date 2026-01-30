@@ -29,14 +29,16 @@ body {
 }
 
 /* ========== Settings Page Background ========== */
-body.settings-page {
+body.settings-page,
+body.auth-page {
   background: url("https://raw.githubusercontent.com/jjermany/plex-notifier/36b5738a0e77901b8719c5753236ce3d87debe06/media/settings_background.png")
               no-repeat center center fixed;
   background-size: cover;
   position: relative;
 }
 
-body.settings-page::before {
+body.settings-page::before,
+body.auth-page::before {
   content: '';
   position: fixed;
   top: 0;
