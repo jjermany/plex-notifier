@@ -6,13 +6,13 @@ from functools import wraps
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, redirect, url_for, flash, request, Response, send_from_directory
+from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, Notification, ShowSubscription
 from .utils import normalize_email, email_to_filename, normalize_show_identity
-from .forms import SettingsForm, TestEmailForm, ManualCheckForm
+from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
     DEFAULT_HISTORY_LIMIT,
     HISTORY_ENTRIES_PER_PAGE,
@@ -29,19 +29,22 @@ serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
 
 # 🔐 Auth helpers
-def check_auth(username, password):
-    return username == os.environ.get("WEBUI_USER") and password == os.environ.get("WEBUI_PASS")
+def _is_safe_next_url(target: str | None) -> bool:
+    return bool(target) and target.startswith("/") and not target.startswith("//")
 
-def authenticate():
-    return Response('Login required.', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+def _is_admin_authed() -> bool:
+    return session.get("admin_authed", False)
+
 
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
+        if not _is_admin_authed():
+            next_url = request.full_path if request.query_string else request.path
+            return redirect(url_for("login", next=next_url))
         return f(*args, **kwargs)
+
     return decorated
 
 def create_app():
@@ -219,6 +222,29 @@ def create_app():
         sched = start_scheduler(app, interval)
         app.config['scheduler'] = sched
         app.logger.info("✅ App initialized successfully.")
+
+    @app.route('/login', methods=['GET', 'POST'])
+    def login():
+        form = LoginForm()
+        next_url = request.args.get("next")
+        if request.method == "GET" and next_url:
+            form.next.data = next_url
+
+        if form.validate_on_submit():
+            username = form.username.data
+            password = form.password.data
+            if (
+                username == os.environ.get("WEBUI_USER")
+                and password == os.environ.get("WEBUI_PASS")
+            ):
+                session["admin_authed"] = True
+                redirect_target = form.next.data or url_for("history")
+                if not _is_safe_next_url(redirect_target):
+                    redirect_target = url_for("history")
+                return redirect(redirect_target)
+            flash("Invalid username or password.", "danger")
+
+        return render_template("login.html", form=form)
 
     @app.route('/settings', methods=['GET', 'POST'])
     @requires_auth
