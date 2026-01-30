@@ -42,7 +42,7 @@ from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
 from .config import Settings, UserPreferences, Notification, db
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -175,6 +175,173 @@ def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMI
     # Cache the result
     notification_cache[normalized_email] = notified.copy()
     return notified
+
+
+def _parse_fallback_identity(identity: str | None) -> tuple[str | None, int | None]:
+    if not identity or not identity.startswith("title:"):
+        return None, None
+    title_part, _, year_part = identity.partition("|year:")
+    title = title_part.replace("title:", "").replace("-", " ").strip()
+    year = None
+    if year_part:
+        try:
+            year = int(year_part.strip())
+        except ValueError:
+            year = None
+    return title or None, year
+
+
+def _extract_show_year_from_title(title: str | None) -> tuple[str | None, int | None]:
+    if not title:
+        return None, None
+    year_match = re.search(r"\((\d{4})\)\s*$", title)
+    if not year_match:
+        return title, None
+    try:
+        year = int(year_match.group(1))
+    except ValueError:
+        return title, None
+    cleaned_title = title[:year_match.start()].strip()
+    return cleaned_title or title, year
+
+
+def _normalize_title_for_match(title: str | None) -> str:
+    if not title:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
+def _extract_show_guid_from_metadata(item: Any) -> Optional[str]:
+    guid = getattr(item, "guid", None)
+    if isinstance(guid, (list, tuple)):
+        guid = guid[0] if guid else None
+    if guid:
+        return str(guid)
+    return None
+
+
+def reconcile_user_preferences(
+    app: Flask,
+    *,
+    run_reason: str = "startup",
+    cutoff_days: int = 30,
+) -> None:
+    with app.app_context():
+        s = Settings.query.first()
+        if not s or not s.plex_url or not s.plex_token or s.plex_token == "placeholder":
+            app.logger.info("Preference reconciliation skipped: Plex settings not configured.")
+            return
+
+        try:
+            plex = PlexServer(s.plex_url, s.plex_token)
+            tv_section = plex.library.section("TV Shows")
+        except Exception as exc:
+            app.logger.warning(f"Preference reconciliation skipped: unable to connect to Plex ({exc}).")
+            return
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+        last_notification_map: dict[str, tuple[datetime | None, str | None]] = {}
+        notification_rows = (
+            db.session.query(
+                Notification.show_key,
+                Notification.show_guid,
+                func.max(Notification.timestamp).label("last_notified"),
+                func.max(Notification.show_title).label("show_title"),
+            )
+            .group_by(Notification.show_key, Notification.show_guid)
+            .all()
+        )
+        for show_key, show_guid, last_notified, show_title in notification_rows:
+            if show_key:
+                last_notification_map[str(show_key)] = (last_notified, show_title)
+            if show_guid:
+                last_notification_map[str(show_guid)] = (last_notified, show_title)
+
+        preferences = UserPreferences.query.filter(
+            or_(UserPreferences.show_key.isnot(None), UserPreferences.show_guid.isnot(None))
+        ).all()
+
+        updated_count = 0
+        scanned_count = 0
+
+        for pref in preferences:
+            identifier_candidates = [c for c in (pref.show_key, pref.show_guid) if c]
+            last_notified = None
+            show_title = None
+            for candidate in identifier_candidates:
+                candidate_key = str(candidate)
+                if candidate_key in last_notification_map:
+                    last_notified, show_title = last_notification_map[candidate_key]
+                    if last_notified:
+                        break
+
+            has_recent_notification = bool(last_notified and last_notified >= cutoff_dt)
+            needs_reconcile = (
+                not has_recent_notification
+                or pref.show_key is None
+                or (pref.show_guid and pref.show_guid.startswith("title:"))
+            )
+
+            if not needs_reconcile:
+                continue
+
+            title, year = _parse_fallback_identity(pref.show_guid)
+            if not title and show_title:
+                title, year = _extract_show_year_from_title(show_title)
+            if not title:
+                continue
+
+            scanned_count += 1
+            try:
+                if year:
+                    search_results = tv_section.search(title=title, year=year, libtype="show")
+                else:
+                    search_results = tv_section.search(title=title, libtype="show")
+            except Exception as exc:
+                app.logger.warning(f"Preference reconciliation search failed for '{title}': {exc}")
+                continue
+
+            if not search_results:
+                continue
+
+            title_key = _normalize_title_for_match(title)
+            matched_show = None
+            for show in search_results:
+                if year and getattr(show, "year", None) == year:
+                    matched_show = show
+                    break
+                if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
+                    matched_show = show
+                    break
+
+            if not matched_show:
+                matched_show = search_results[0]
+
+            new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
+            new_show_guid = _extract_show_guid_from_metadata(matched_show)
+
+            if new_show_key and pref.show_key != new_show_key:
+                pref.show_key = new_show_key
+            if new_show_guid and pref.show_guid != new_show_guid:
+                pref.show_guid = new_show_guid
+
+            if db.session.is_modified(pref, include_collections=False):
+                updated_count += 1
+
+        if updated_count:
+            try:
+                db.session.commit()
+            except Exception as exc:
+                app.logger.warning(f"Preference reconciliation failed to commit updates: {exc}")
+                db.session.rollback()
+                return
+
+        app.logger.info(
+            "Preference reconciliation (%s) updated %s of %s scanned preferences.",
+            run_reason,
+            updated_count,
+            scanned_count,
+        )
 
 
 def start_scheduler(app, interval) -> BackgroundScheduler:

@@ -20,7 +20,13 @@ from .constants import (
     SUBSCRIPTIONS_SHOWS_PER_PAGE,
     INACTIVE_SHOW_THRESHOLD_DAYS,
 )
-from .notifier import start_scheduler, _send_email, check_new_episodes, register_debug_route
+from .notifier import (
+    start_scheduler,
+    _send_email,
+    check_new_episodes,
+    register_debug_route,
+    reconcile_user_preferences,
+)
 from .logging_utils import TZFormatter
 from .constants import (
     RATE_LIMIT_TEST_EMAIL,
@@ -232,6 +238,30 @@ def create_app():
         interval = s.notify_interval or 30
         sched = start_scheduler(app, interval)
         app.config['scheduler'] = sched
+        try:
+            sched.add_job(
+                func=lambda: reconcile_user_preferences(
+                    app,
+                    run_reason="scheduled",
+                    cutoff_days=INACTIVE_SHOW_THRESHOLD_DAYS,
+                ),
+                trigger='interval',
+                hours=24,
+                id='reconcile_preferences',
+                replace_existing=True,
+            )
+            app.logger.info("Scheduled preference reconciliation job to run daily.")
+        except Exception as exc:
+            app.logger.warning(f"Failed to schedule preference reconciliation job: {exc}")
+
+        threading.Thread(
+            target=lambda: reconcile_user_preferences(
+                app,
+                run_reason="startup",
+                cutoff_days=INACTIVE_SHOW_THRESHOLD_DAYS,
+            ),
+            daemon=True,
+        ).start()
         app.logger.info("✅ App initialized successfully.")
 
     @app.route('/login', methods=['GET', 'POST'])
