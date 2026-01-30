@@ -1,18 +1,86 @@
-{% extends "base.html" %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Admin Login - Plex Notifier</title>
+  {% include "_pwa_icons.html" %}
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="auth-page">
+  <div class="container py-5">
+    <div class="d-flex align-items-center justify-content-center mb-4">
+      <img src="https://github.com/jjermany/plex-notifier/blob/main/media/logo.png?raw=true"
+           alt="Plex Notifier Logo" height="48" class="me-3">
+      <div>
+        <h1 class="mb-1 text-white">Admin Login</h1>
+        <p class="text-muted mb-0">Sign in to manage Plex Notifier settings.</p>
+      </div>
+    </div>
 
-{% block content %}
-  <h1>Log In</h1>
-  <form method="post">
-    {{ form.hidden_tag() }}
-    <div class="form-group">
-      {{ form.username.label }}
-      {{ form.username }}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            <i class="bi bi-{% if category == 'success' %}check-circle{% elif category == 'danger' %}exclamation-triangle{% else %}info-circle{% endif %}-fill me-2"></i>
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="row justify-content-center">
+      <div class="col-12 col-md-8 col-lg-6">
+        <div class="card shadow-lg">
+          <div class="card-header">
+            <i class="bi bi-shield-lock-fill"></i> Secure Access
+          </div>
+          <div class="card-body">
+            <form method="post">
+              {{ form.hidden_tag() }}
+              <div class="mb-3">
+                {{ form.username.label(class="form-label text-white") }}
+                <div class="input-group">
+                  <span class="input-group-text bg-dark border-secondary">
+                    <i class="bi bi-person-fill"></i>
+                  </span>
+                  {{ form.username(class="form-control", placeholder="Admin username") }}
+                </div>
+                {% if form.username.errors %}
+                  <div class="text-danger small mt-1">
+                    <i class="bi bi-exclamation-circle"></i> {{ form.username.errors[0] }}
+                  </div>
+                {% endif %}
+              </div>
+              <div class="mb-4">
+                {{ form.password.label(class="form-label text-white") }}
+                <div class="input-group">
+                  <span class="input-group-text bg-dark border-secondary">
+                    <i class="bi bi-key-fill"></i>
+                  </span>
+                  {{ form.password(class="form-control", placeholder="Password", type="password") }}
+                </div>
+                {% if form.password.errors %}
+                  <div class="text-danger small mt-1">
+                    <i class="bi bi-exclamation-circle"></i> {{ form.password.errors[0] }}
+                  </div>
+                {% endif %}
+              </div>
+              {{ form.next }}
+              <div class="d-grid">
+                <button class="btn btn-warning" type="submit">
+                  <i class="bi bi-box-arrow-in-right"></i> {{ form.submit.label.text }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <p class="text-center text-muted mt-3 mb-0">Need access? Contact your Plex Notifier administrator.</p>
+      </div>
     </div>
-    <div class="form-group">
-      {{ form.password.label }}
-      {{ form.password }}
-    </div>
-    {{ form.next }}
-    <button class="btn" type="submit">{{ form.submit.label.text }}</button>
-  </form>
-{% endblock %}
+  </div>
+</body>
+</html>
