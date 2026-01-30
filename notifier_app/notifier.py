@@ -298,7 +298,13 @@ def reconcile_user_preferences(
                     fetched_item = tv_section.get(pref.show_key)
                 except Exception:
                     try:
-                        fetched_item = plex.fetchItem(pref.show_key)
+                        show_key = str(pref.show_key)
+                        fetch_path = (
+                            show_key
+                            if "/library/metadata/" in show_key
+                            else f"/library/metadata/{show_key}"
+                        )
+                        fetched_item = plex.fetchItem(fetch_path)
                     except Exception as exc:
                         app.logger.warning(
                             "Preference reconciliation failed to fetch show metadata for key '%s': %s",
