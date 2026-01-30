@@ -334,6 +334,7 @@ function initLogViewer() {
   let offset = 0;
   let pollTimer = null;
   let pendingLine = '';
+  let firstFetch = true;
 
   const setStatus = (state, text) => {
     if (!statusBadge) return;
@@ -371,7 +372,8 @@ function initLogViewer() {
 
   const fetchLogs = async () => {
     try {
-      const response = await fetch(`/api/admin/logs?offset=${offset}`);
+      const url = firstFetch ? '/api/admin/logs?offset=tail' : `/api/admin/logs?offset=${offset}`;
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Unexpected response: ${response.status}`);
       }
@@ -397,6 +399,7 @@ function initLogViewer() {
       }
       appendLines(lines);
       setStatus('connected', 'Live');
+      firstFetch = false;
     } catch (error) {
       setStatus('error', 'Disconnected');
     }
