@@ -818,19 +818,28 @@ def _user_has_subscription_fallback(
     if alternate_email and alternate_email not in emails:
         emails.append(alternate_email)
 
-    preference = (
+    preferences = (
         UserPreferences.query
         .filter(
             UserPreferences.email.in_(emails),
-            UserPreferences.show_opt_out.is_(False),
             or_(
                 UserPreferences.show_key.in_(candidates),
                 UserPreferences.show_guid.in_(candidates),
             ),
         )
-        .first()
+        .all()
     )
-    return preference is not None
+    if not preferences:
+        return False
+
+    is_subscribed = any(not preference.show_opt_out for preference in preferences)
+    if not is_subscribed:
+        current_app.logger.info(
+            "Preference rows exist for user %s and show candidates %s but all are opted out",
+            emails,
+            candidates,
+        )
+    return is_subscribed
 
 
 def _user_has_watched_show(
