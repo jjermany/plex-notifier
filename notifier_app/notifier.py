@@ -3,6 +3,7 @@ import smtplib
 import requests
 import logging
 import time
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
@@ -309,6 +310,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 show_key = ep.grandparentRatingKey
                 show_key_str = str(show_key) if show_key is not None else None
                 show_title = ep.grandparentTitle
+                show_year = getattr(ep, "grandparentYear", None)
+                if show_year is None:
+                    show_year = getattr(ep, "year", None)
                 fallback_identity = _get_fallback_identity_for_episode(ep)
                 raw_show_guid = _extract_show_guid(ep)
 
@@ -369,12 +373,14 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 has_watched_show, history_status = _user_has_watched_show(s, uid, show_key, fallback_identity)
                 if not has_watched_show:
                     if history_status in {"empty", "error"}:
-                        has_subscription = _user_has_subscription_fallback(
+                        has_subscription, fallback_preferences = _user_has_subscription_fallback(
                             canon,
                             user_email,
                             show_key_str,
                             raw_show_guid,
                             fallback_identity,
+                            show_title,
+                            show_year,
                         )
                         if has_subscription:
                             current_app.logger.info(
@@ -385,6 +391,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                 redacted_email,
                             )
                             has_watched_show = True
+                            show_guid_update = raw_show_guid or show_guid
+                            if show_guid_update or show_key_str:
+                                for preference in fallback_preferences:
+                                    if preference.show_opt_out:
+                                        continue
+                                    if show_key_str and preference.show_key != show_key_str:
+                                        preference.show_key = show_key_str
+                                        needs_commit = True
+                                    if show_guid_update and preference.show_guid != show_guid_update:
+                                        preference.show_guid = show_guid_update
+                                        needs_commit = True
                         else:
                             item_id = show_key_str or fallback_identity or "unknown"
                             dedup_key = (canon, item_id)
@@ -809,37 +826,86 @@ def _user_has_subscription_fallback(
     show_key: Optional[str],
     show_guid: Optional[str],
     fallback_identity: Optional[str],
-) -> bool:
+    show_title: Optional[str],
+    show_year: Optional[int],
+) -> Tuple[bool, List[UserPreferences]]:
+    def _normalize_stored_identity(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        raw_value = value.strip()
+        if not raw_value:
+            return ""
+        lowered = raw_value.lower()
+        if lowered.startswith("title:"):
+            return lowered
+        year_match = re.search(r"\|year:(\d{4})$", lowered)
+        year = int(year_match.group(1)) if year_match else None
+        title_part = raw_value[:year_match.start()] if year_match else raw_value
+        return normalize_show_identity(title_part, year)
+
     candidates = [candidate for candidate in (show_guid, show_key, fallback_identity) if candidate]
-    if not candidates:
-        return False
 
     emails = [email]
     if alternate_email and alternate_email not in emails:
         emails.append(alternate_email)
 
-    preferences = (
-        UserPreferences.query
-        .filter(
-            UserPreferences.email.in_(emails),
-            or_(
-                UserPreferences.show_key.in_(candidates),
-                UserPreferences.show_guid.in_(candidates),
-            ),
+    preferences = []
+    if candidates:
+        preferences = (
+            UserPreferences.query
+            .filter(
+                UserPreferences.email.in_(emails),
+                or_(
+                    UserPreferences.show_key.in_(candidates),
+                    UserPreferences.show_guid.in_(candidates),
+                ),
+            )
+            .all()
         )
-        .all()
-    )
-    if not preferences:
-        return False
+    if preferences:
+        active_preferences = [preference for preference in preferences if not preference.show_opt_out]
+        if not active_preferences:
+            current_app.logger.info(
+                "Preference rows exist for user %s and show candidates %s but all are opted out",
+                emails,
+                candidates,
+            )
+            return False, []
+        return True, active_preferences
 
-    is_subscribed = any(not preference.show_opt_out for preference in preferences)
-    if not is_subscribed:
+    normalized_identity = fallback_identity or normalize_show_identity(show_title, show_year)
+    if not normalized_identity:
+        return False, []
+
+    title_preferences = UserPreferences.query.filter(UserPreferences.email.in_(emails)).all()
+    matched_preferences: List[UserPreferences] = []
+    opted_out_matches = 0
+
+    for preference in title_preferences:
+        for stored_value in (preference.show_key, preference.show_guid):
+            stored_identity = _normalize_stored_identity(stored_value)
+            if stored_identity and stored_identity == normalized_identity:
+                if preference.show_opt_out:
+                    opted_out_matches += 1
+                else:
+                    matched_preferences.append(preference)
+                break
+
+    if matched_preferences:
         current_app.logger.info(
-            "Preference rows exist for user %s and show candidates %s but all are opted out",
-            emails,
-            candidates,
+            "Title-based subscription fallback match used for %s (%s).",
+            show_title or "Unknown",
+            normalized_identity,
         )
-    return is_subscribed
+        return True, matched_preferences
+
+    if opted_out_matches:
+        current_app.logger.info(
+            "Preference rows exist for user %s and normalized title %s but all are opted out",
+            emails,
+            normalized_identity,
+        )
+    return False, []
 
 
 def _user_has_watched_show(
