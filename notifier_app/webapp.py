@@ -430,7 +430,8 @@ def create_app():
         )
 
         for show_key, show_guid, show_title, last_notified in show_latest:
-            show_id = show_guid or normalize_show_identity(show_title) or show_key
+            fallback_id = normalize_show_identity(show_title)
+            show_id = show_guid or fallback_id or show_key
             if show_id in show_map:
                 if last_notified and show_map[show_id]['last_notified']:
                     if last_notified > show_map[show_id]['last_notified']:
@@ -441,12 +442,15 @@ def create_app():
                     show_map[show_id]['show_guid'] = show_guid
                 if show_key and not show_map[show_id]['show_key']:
                     show_map[show_id]['show_key'] = show_key
+                if fallback_id and not show_map[show_id].get('show_fallback_id'):
+                    show_map[show_id]['show_fallback_id'] = fallback_id
                 continue
             show_map[show_id] = {
                 'title': show_title,
                 'last_notified': last_notified,
                 'show_guid': show_guid,
                 'show_key': show_key,
+                'show_fallback_id': fallback_id,
             }
 
         # Fallback to log file if database is empty (backward compatibility)
@@ -465,12 +469,14 @@ def create_app():
                                 key_part = parts.split("[Key:")[1]
                                 show_key = key_part.split("]")[0]
                                 # For log file entries, we don't have timestamp, set to None
-                                show_id = normalize_show_identity(show_title) or show_key
+                                fallback_id = normalize_show_identity(show_title)
+                                show_id = fallback_id or show_key
                                 show_map[show_id] = {
                                     'title': show_title,
                                     'last_notified': None,
                                     'show_guid': None,
                                     'show_key': show_key,
+                                    'show_fallback_id': fallback_id,
                                 }
                             except Exception:
                                 continue
@@ -479,6 +485,11 @@ def create_app():
             info['show_key']: show_id
             for show_id, info in show_map.items()
             if info.get('show_key')
+        }
+        fallback_id_to_id = {
+            info['show_fallback_id']: show_id
+            for show_id, info in show_map.items()
+            if info.get('show_fallback_id')
         }
 
         user_prefs = UserPreferences.query.filter(
@@ -491,6 +502,8 @@ def create_app():
             if pref.show_key is None:
                 continue
             show_id = pref.show_guid
+            if show_id and show_id in fallback_id_to_id:
+                show_id = fallback_id_to_id[show_id]
             if not show_id and pref.show_key in show_key_to_id:
                 show_id = show_key_to_id[pref.show_key]
                 pref.show_guid = show_id
@@ -520,6 +533,7 @@ def create_app():
                 'key': key,
                 'show_key': info.get('show_key') or "",
                 'show_guid': info.get('show_guid') or "",
+                'show_fallback_id': info.get('show_fallback_id') or "",
                 'title': info['title'],
                 'opted_out': key in opted_out_shows,
                 'last_notified': info['last_notified']
@@ -707,9 +721,32 @@ def create_app():
                 user_notifs = Notification.query.filter_by(email=u).limit(100).all()
                 for n in user_notifs:
                     if n.show_key not in show_map:
-                        show_map[n.show_key] = n.show_title
+                        show_map[n.show_key] = {
+                            "title": n.show_title,
+                            "show_key": n.show_key,
+                            "show_guid": n.show_guid,
+                            "show_fallback_id": normalize_show_identity(n.show_title),
+                        }
 
-                opted_out = [show_map.get(p.show_key, p.show_key) for p in prefs if p.show_key]
+                opted_out = []
+                for p in prefs:
+                    if not p.show_key:
+                        continue
+                    info = show_map.get(p.show_key)
+                    if info:
+                        opted_out.append({
+                            "title": info["title"],
+                            "show_key": info["show_key"],
+                            "show_guid": info.get("show_guid") or p.show_guid or "",
+                            "show_fallback_id": info.get("show_fallback_id") or "",
+                        })
+                    else:
+                        opted_out.append({
+                            "title": p.show_key,
+                            "show_key": p.show_key,
+                            "show_guid": p.show_guid or "",
+                            "show_fallback_id": "",
+                        })
 
                 # Generate subscription token for this user
                 subscription_token = serializer.dumps(u, salt="unsubscribe")
