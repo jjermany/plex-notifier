@@ -665,9 +665,13 @@ def create_app():
     def admin_logs():
         log_path = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs", "app.log"))
         try:
-            offset = int(request.args.get("offset", "0"))
+            offset_arg = request.args.get("offset", "0")
+            start_arg = request.args.get("start")
+            tail_requested = offset_arg == "tail" or start_arg == "tail"
+            offset = 0 if tail_requested else int(offset_arg)
         except ValueError:
             offset = 0
+            tail_requested = False
         max_bytes = 50_000
         try:
             requested_max = int(request.args.get("max_bytes", max_bytes))
@@ -684,7 +688,9 @@ def create_app():
             })
 
         file_size = os.path.getsize(log_path)
-        if offset < 0 or offset > file_size:
+        if tail_requested:
+            offset = file_size
+        elif offset < 0 or offset > file_size:
             offset = 0
 
         with open(log_path, "rb") as log_file:
