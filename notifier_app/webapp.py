@@ -246,6 +246,11 @@ def create_app():
 
         return render_template("login.html", form=form)
 
+    @app.route("/logout")
+    def logout():
+        session.pop("admin_authed", None)
+        return redirect(url_for("login"))
+
     @app.route('/settings', methods=['GET', 'POST'])
     @requires_auth
     def settings():
