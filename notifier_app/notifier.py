@@ -1088,6 +1088,23 @@ def _user_has_subscription_fallback(
         title_part = raw_value[:year_match.start()] if year_match else raw_value
         return normalize_show_identity(title_part, year)
 
+    def _preference_matches_identity(
+        preference: UserPreferences,
+        *,
+        normalized_identity: str,
+        show_key_value: Optional[str],
+        show_guid_value: Optional[str],
+    ) -> bool:
+        if show_key_value and preference.show_key and str(preference.show_key) == str(show_key_value):
+            return True
+        if show_guid_value and preference.show_guid and str(preference.show_guid) == str(show_guid_value):
+            return True
+        for stored_value in (preference.show_key, preference.show_guid):
+            stored_identity = _normalize_stored_identity(stored_value)
+            if stored_identity and stored_identity == normalized_identity:
+                return True
+        return False
+
     candidates = [candidate for candidate in (show_guid, show_key, fallback_identity) if candidate]
 
     emails = [email]
@@ -1191,6 +1208,63 @@ def _user_has_subscription_fallback(
             emails,
             normalized_identity,
         )
+
+    notification_matches_identity = False
+    try:
+        notification_rows = Notification.query.filter(Notification.email.in_(emails)).all()
+        for notification in notification_rows:
+            if show_key and notification.show_key and str(notification.show_key) == str(show_key):
+                notification_matches_identity = True
+                break
+            if show_guid and notification.show_guid and str(notification.show_guid) == str(show_guid):
+                notification_matches_identity = True
+                break
+            if notification.show_title:
+                notif_title, notif_year = _extract_show_year_from_title(notification.show_title)
+                effective_year = notif_year if notif_year is not None else show_year
+                notif_identity = normalize_show_identity(notif_title or notification.show_title, effective_year)
+                if notif_identity and notif_identity == normalized_identity:
+                    notification_matches_identity = True
+                    break
+    except Exception as exc:
+        current_app.logger.warning(
+            "Unable to query notification history for fallback subscription check: %s",
+            exc,
+        )
+
+    if notification_matches_identity:
+        opt_out_preferences = UserPreferences.query.filter(
+            UserPreferences.email.in_(emails),
+            UserPreferences.show_opt_out.is_(True),
+        ).all()
+        opted_out = any(
+            _preference_matches_identity(
+                preference,
+                normalized_identity=normalized_identity,
+                show_key_value=show_key,
+                show_guid_value=show_guid,
+            )
+            for preference in opt_out_preferences
+        )
+        if opted_out:
+            current_app.logger.info(
+                "Notification history matched %s but user %s has opted out.",
+                normalized_identity,
+                emails,
+            )
+            return False, []
+        synthetic_preference = UserPreferences(
+            email=emails[0],
+            show_key=show_key,
+            show_guid=show_guid or normalized_identity,
+            show_opt_out=False,
+        )
+        current_app.logger.info(
+            "Notification history subscription fallback match used for %s (%s).",
+            show_title or "Unknown",
+            normalized_identity,
+        )
+        return True, [synthetic_preference]
     return False, []
 
 
