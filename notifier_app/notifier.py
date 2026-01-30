@@ -287,13 +287,39 @@ def reconcile_user_preferences(
             if not needs_reconcile:
                 continue
 
+            scanned_count += 1
+
             title, year = _parse_fallback_identity(pref.show_guid)
             if not title and show_title:
                 title, year = _extract_show_year_from_title(show_title)
+            if not title and pref.show_key:
+                fetched_item = None
+                try:
+                    fetched_item = tv_section.get(pref.show_key)
+                except Exception:
+                    try:
+                        fetched_item = plex.fetchItem(pref.show_key)
+                    except Exception as exc:
+                        app.logger.warning(
+                            "Preference reconciliation failed to fetch show metadata for key '%s': %s",
+                            pref.show_key,
+                            exc,
+                        )
+                if fetched_item:
+                    new_show_key = str(getattr(fetched_item, "ratingKey", "") or "") or None
+                    new_show_guid = _extract_show_guid_from_metadata(fetched_item)
+                    if new_show_key and pref.show_key != new_show_key:
+                        pref.show_key = new_show_key
+                    if new_show_guid and pref.show_guid != new_show_guid:
+                        pref.show_guid = new_show_guid
+                    title = getattr(fetched_item, "title", None)
+                    year = getattr(fetched_item, "year", None)
+                    if title and year is None:
+                        title, year = _extract_show_year_from_title(title)
             if not title:
+                if db.session.is_modified(pref, include_collections=False):
+                    updated_count += 1
                 continue
-
-            scanned_count += 1
             try:
                 if year:
                     search_results = tv_section.search(title=title, year=year, libtype="show")
