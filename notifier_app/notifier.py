@@ -1042,12 +1042,56 @@ def _user_has_subscription_fallback(
             return False, []
         return True, active_preferences
 
+    cleaned_title, extracted_year = _extract_show_year_from_title(show_title)
+    normalized_title = _normalize_title_for_match(cleaned_title)
+    episode_year = show_year or extracted_year
+    if normalized_title:
+        title_preferences = (
+            UserPreferences.query
+            .filter(
+                UserPreferences.email.in_(emails),
+                UserPreferences.show_guid.startswith("title:"),
+            )
+            .all()
+        )
+        matched_preferences: List[UserPreferences] = []
+        opted_out_matches = 0
+
+        for preference in title_preferences:
+            stored_title, stored_year = _parse_fallback_identity(preference.show_guid)
+            stored_normalized = _normalize_title_for_match(stored_title)
+            if not stored_normalized or stored_normalized != normalized_title:
+                continue
+            if stored_year is not None and episode_year is not None and stored_year != episode_year:
+                continue
+            if stored_year is not None and episode_year is None:
+                continue
+            if preference.show_opt_out:
+                opted_out_matches += 1
+            else:
+                matched_preferences.append(preference)
+
+        if matched_preferences:
+            current_app.logger.info(
+                "Title-only subscription fallback match used for %s (%s).",
+                show_title or "Unknown",
+                normalized_title,
+            )
+            return True, matched_preferences
+
+        if opted_out_matches:
+            current_app.logger.info(
+                "Preference rows exist for user %s and normalized title %s but all are opted out",
+                emails,
+                normalized_title,
+            )
+
     normalized_identity = fallback_identity or normalize_show_identity(show_title, show_year)
     if not normalized_identity:
         return False, []
 
     title_preferences = UserPreferences.query.filter(UserPreferences.email.in_(emails)).all()
-    matched_preferences: List[UserPreferences] = []
+    matched_preferences = []
     opted_out_matches = 0
 
     for preference in title_preferences:
