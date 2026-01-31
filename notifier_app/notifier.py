@@ -31,6 +31,7 @@ from .constants import (
     API_RETRY_ATTEMPTS,
     API_RETRY_MIN_WAIT_SECONDS,
     API_RETRY_MAX_WAIT_SECONDS,
+    TAUTULLI_WATCHED_PERCENT_THRESHOLD,
 )
 
 from flask import current_app, Flask
@@ -1499,22 +1500,57 @@ def _user_has_watched_show(
     grandparent_rating_key: Any,
     fallback_identity: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    def _is_affirmative_watched(value: Any) -> bool:
+    def _coerce_percent(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            try:
+                value = float(value)
+            except ValueError:
+                return None
+        if isinstance(value, (int, float)):
+            percent_value = float(value)
+            if 0 <= percent_value <= 1:
+                percent_value *= 100
+            return percent_value
+        return None
+
+    def _extract_completion_percent(item: Dict[str, Any]) -> Optional[float]:
+        for key in (
+            "percent_complete",
+            "progress_percent",
+            "percent",
+            "watched_percent",
+            "percent_watched",
+        ):
+            percent_value = _coerce_percent(item.get(key))
+            if percent_value is not None:
+                return percent_value
+        return None
+
+    def _is_affirmative_watched(value: Any, completion_percent: Optional[float]) -> bool:
+        if completion_percent is not None:
+            return completion_percent >= TAUTULLI_WATCHED_PERCENT_THRESHOLD
         if value is None:
             return False
         if isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):
-            return value > 0
+            percent_value = _coerce_percent(value)
+            if percent_value is None:
+                return False
+            return percent_value >= TAUTULLI_WATCHED_PERCENT_THRESHOLD
         if isinstance(value, str):
             normalized = value.strip().lower()
             if not normalized:
                 return False
-            try:
-                # Numeric strings such as "1" should be treated as watched
-                return float(normalized) > 0
-            except ValueError:
-                return normalized in AFFIRMATIVE_WATCHED_STATUSES
+            percent_value = _coerce_percent(normalized)
+            if percent_value is not None:
+                return percent_value >= TAUTULLI_WATCHED_PERCENT_THRESHOLD
+            return normalized in AFFIRMATIVE_WATCHED_STATUSES
         return False
 
     try:
@@ -1545,16 +1581,20 @@ def _user_has_watched_show(
 
             for item in history:
                 watched_status = item.get('watched_status')
+                completion_percent = _extract_completion_percent(item)
                 gp_key = str(item.get('grandparent_rating_key'))
                 if grandparent_rating_key is not None and gp_key == grandparent_key_str:
-                    if _is_affirmative_watched(watched_status):
+                    if _is_affirmative_watched(watched_status, completion_percent):
                         return True, "available"
                 if fallback_identity:
                     item_identity = normalize_show_identity(
                         item.get('grandparent_title'),
                         item.get('grandparent_year') or item.get('year'),
                     )
-                    if item_identity == fallback_identity and _is_affirmative_watched(watched_status):
+                    if item_identity == fallback_identity and _is_affirmative_watched(
+                        watched_status,
+                        completion_percent,
+                    ):
                         return True, "available"
 
             records_filtered = payload.get('recordsFiltered')
