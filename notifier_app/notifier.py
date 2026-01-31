@@ -282,6 +282,69 @@ def reconcile_user_preferences(
         key_index: dict[str, str] = {}
         title_index: dict[str, str] = {}
 
+        def _fetch_show_by_key(show_key_value: str) -> Any:
+            if not show_key_value:
+                return None
+            try:
+                return tv_section.get(show_key_value)
+            except Exception:
+                try:
+                    fetch_path = (
+                        show_key_value
+                        if "/library/metadata/" in show_key_value
+                        else f"/library/metadata/{show_key_value}"
+                    )
+                    return plex.fetchItem(fetch_path)
+                except Exception as exc:
+                    app.logger.warning(
+                        "Preference reconciliation failed to fetch show metadata for key '%s': %s",
+                        show_key_value,
+                        exc,
+                    )
+                    return None
+
+        def _search_show_by_title(search_title: str, search_year: Optional[int]) -> Any:
+            if not search_title:
+                return None
+            try:
+                if search_year:
+                    search_results = tv_section.search(title=search_title, year=search_year, libtype="show")
+                else:
+                    search_results = tv_section.search(title=search_title, libtype="show")
+            except Exception as exc:
+                app.logger.warning(f"Preference reconciliation search failed for '{search_title}': {exc}")
+                return None
+
+            if not search_results:
+                return None
+
+            title_key = _normalize_title_for_match(search_title)
+            for show in search_results:
+                if search_year and getattr(show, "year", None) == search_year:
+                    return show
+                if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
+                    return show
+            return search_results[0]
+
+        def _log_mismatch(
+            pref: UserPreferences,
+            *,
+            source: str,
+            changes: Dict[str, Tuple[Optional[str], Optional[str]]],
+        ) -> None:
+            if not changes:
+                return
+            change_summary = ", ".join(
+                f"{field} {old or 'None'} -> {new or 'None'}"
+                for field, (old, new) in changes.items()
+            )
+            app.logger.info(
+                "Preference reconciliation mismatch detected for preference %s (%s): %s",
+                pref.id,
+                source,
+                change_summary,
+            )
+
         def _merge_groups(primary_id: str, merge_id: str) -> None:
             if primary_id == merge_id:
                 return
@@ -415,47 +478,58 @@ def reconcile_user_preferences(
             scanned_count += 1
 
             matched_show = None
-            if show_key:
-                try:
-                    matched_show = tv_section.get(show_key)
-                except Exception:
-                    try:
-                        fetch_path = (
-                            show_key
-                            if "/library/metadata/" in show_key
-                            else f"/library/metadata/{show_key}"
-                        )
-                        matched_show = plex.fetchItem(fetch_path)
-                    except Exception as exc:
-                        app.logger.warning(
-                            "Preference reconciliation failed to fetch show metadata for key '%s': %s",
-                            show_key,
-                            exc,
-                        )
-
-            if not matched_show and title:
-                try:
-                    if year:
-                        search_results = tv_section.search(title=title, year=year, libtype="show")
-                    else:
-                        search_results = tv_section.search(title=title, libtype="show")
-                except Exception as exc:
-                    app.logger.warning(f"Preference reconciliation search failed for '{title}': {exc}")
+            needs_reconcile = False
+            for pref in group["prefs"].values():
+                stored_key = str(pref.show_key) if pref.show_key else None
+                stored_guid = str(pref.show_guid) if pref.show_guid else None
+                if stored_key:
+                    candidate_show = _fetch_show_by_key(stored_key)
+                    if candidate_show:
+                        if not matched_show:
+                            matched_show = candidate_show
+                        canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
+                        canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                        changes = {}
+                        if canonical_key and stored_key != canonical_key:
+                            changes["show_key"] = (stored_key, canonical_key)
+                        if canonical_guid and stored_guid and stored_guid != canonical_guid:
+                            changes["show_guid"] = (stored_guid, canonical_guid)
+                        if changes:
+                            needs_reconcile = True
+                            _log_mismatch(pref, source="show_key", changes=changes)
                     continue
 
-                if not search_results:
-                    continue
+                if stored_guid:
+                    search_title = None
+                    search_year = None
+                    if stored_guid.startswith("title:"):
+                        search_title, search_year = _parse_fallback_identity(stored_guid)
+                    if not search_title:
+                        search_title = title
+                        search_year = year
+                    if not search_title and group.get("title_identity"):
+                        search_title, search_year = _parse_fallback_identity(group["title_identity"])
+                    candidate_show = _search_show_by_title(search_title, search_year)
+                    if candidate_show:
+                        if not matched_show:
+                            matched_show = candidate_show
+                        canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
+                        canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                        changes = {}
+                        if canonical_guid and stored_guid != canonical_guid:
+                            changes["show_guid"] = (stored_guid, canonical_guid)
+                        if canonical_key and pref.show_key and str(pref.show_key) != canonical_key:
+                            changes["show_key"] = (str(pref.show_key), canonical_key)
+                        if changes:
+                            needs_reconcile = True
+                            _log_mismatch(pref, source="show_guid", changes=changes)
 
-                title_key = _normalize_title_for_match(title)
-                for show in search_results:
-                    if year and getattr(show, "year", None) == year:
-                        matched_show = show
-                        break
-                    if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
-                        matched_show = show
-                        break
-                if not matched_show:
-                    matched_show = search_results[0]
+            if not needs_reconcile:
+                if show_key:
+                    matched_show = matched_show or _fetch_show_by_key(show_key)
+
+                if not matched_show and title:
+                    matched_show = _search_show_by_title(title, year)
 
             if not matched_show:
                 continue
