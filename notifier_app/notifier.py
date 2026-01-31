@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from typing import List, Dict, Any, Set, Optional, Tuple
-from collections import deque
+from collections import deque, Counter
 from logging.handlers import RotatingFileHandler
 from functools import lru_cache
 from cachetools import TTLCache
@@ -470,6 +470,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             return
 
         processed_subscription_fallback_misses: Set[Tuple[str, str]] = set()
+        subscription_fallback_miss_counts: Counter[str] = Counter()
 
         interval = override_interval_minutes or s.notify_interval or 30
         cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
@@ -661,13 +662,15 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             item_id = show_key_str or fallback_identity or "unknown"
                             dedup_key = (canon, item_id)
                             if dedup_key not in processed_subscription_fallback_misses:
-                                current_app.logger.info(
-                                    "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
-                                    show_title or "Unknown",
-                                    item_id,
-                                    history_status,
-                                    redacted_email,
-                                )
+                                subscription_fallback_miss_counts[show_title or item_id] += 1
+                                if current_app.logger.isEnabledFor(logging.DEBUG):
+                                    current_app.logger.debug(
+                                        "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
+                                        show_title or "Unknown",
+                                        item_id,
+                                        history_status,
+                                        redacted_email,
+                                    )
                                 processed_subscription_fallback_misses.add(dedup_key)
                     if not has_watched_show and has_recent_notification_for_show and fallback_identity:
                         prefer_fallback_identity = True
@@ -728,6 +731,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             if watchable:
                 user_eps[user_email] = watchable
+
+        if subscription_fallback_miss_counts:
+            total_misses = sum(subscription_fallback_miss_counts.values())
+            top_misses = subscription_fallback_miss_counts.most_common(3)
+            top_summary = ", ".join(
+                f"{show} ({count})" for show, count in top_misses
+            )
+            current_app.logger.info(
+                "Subscription fallback misses this run: %s total. Top shows: %s.",
+                total_misses,
+                top_summary or "None",
+            )
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
