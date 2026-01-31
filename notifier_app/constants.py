@@ -43,6 +43,7 @@ LOG_BACKUP_COUNT = 1
 
 # Tautulli API pagination
 TAUTULLI_MAX_PAGE_LENGTH = 1000  # Maximum records per page
+TAUTULLI_WATCHED_PERCENT_THRESHOLD = 80  # Minimum percent watched to qualify as "watched"
 
 # Health check retention
 HEALTH_CHECK_RETENTION_DAYS = 30  # Keep health check records for 30 days
