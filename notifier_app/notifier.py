@@ -42,7 +42,7 @@ from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
 from .config import Settings, UserPreferences, Notification, db
-from sqlalchemy import or_, func
+from sqlalchemy import or_
 
 # Logging
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
@@ -264,107 +264,210 @@ def reconcile_user_preferences(
             app.logger.warning(f"Preference reconciliation skipped: unable to connect to Plex ({exc}).")
             return
 
-        cutoff_dt = datetime.utcnow() - timedelta(days=cutoff_days)
-        ignore_recent_cutoff = run_reason == "startup"
-        last_notification_map: dict[str, tuple[datetime | None, str | None]] = {}
         notification_rows = (
             db.session.query(
                 Notification.show_key,
                 Notification.show_guid,
-                func.max(Notification.timestamp).label("last_notified"),
-                func.max(Notification.show_title).label("show_title"),
+                Notification.show_title,
             )
-            .group_by(Notification.show_key, Notification.show_guid)
+            .distinct()
             .all()
         )
-        for show_key, show_guid, last_notified, show_title in notification_rows:
-            if show_key:
-                last_notification_map[str(show_key)] = (last_notified, show_title)
-            if show_guid:
-                last_notification_map[str(show_guid)] = (last_notified, show_title)
-
         preferences = UserPreferences.query.filter(
             or_(UserPreferences.show_key.isnot(None), UserPreferences.show_guid.isnot(None))
         ).all()
+
+        show_groups: dict[str, dict[str, Any]] = {}
+        guid_index: dict[str, str] = {}
+        key_index: dict[str, str] = {}
+        title_index: dict[str, str] = {}
+
+        def _merge_groups(primary_id: str, merge_id: str) -> None:
+            if primary_id == merge_id:
+                return
+            primary = show_groups[primary_id]
+            secondary = show_groups.pop(merge_id)
+            for guid_value in secondary["match_guids"]:
+                primary["match_guids"].add(guid_value)
+                guid_index[guid_value] = primary_id
+            for key_value in secondary["match_keys"]:
+                primary["match_keys"].add(key_value)
+                key_index[key_value] = primary_id
+            if secondary.get("title_identity"):
+                primary.setdefault("title_identity", secondary["title_identity"])
+                title_index[secondary["title_identity"]] = primary_id
+            if secondary.get("show_guid") and not primary.get("show_guid"):
+                primary["show_guid"] = secondary["show_guid"]
+            if secondary.get("show_key") and not primary.get("show_key"):
+                primary["show_key"] = secondary["show_key"]
+            if secondary.get("title") and not primary.get("title"):
+                primary["title"] = secondary["title"]
+                primary["year"] = secondary.get("year")
+            for pref_id, pref in secondary["prefs"].items():
+                primary["prefs"].setdefault(pref_id, pref)
+
+        def _ensure_group(
+            *,
+            show_guid: Optional[str],
+            show_key: Optional[str],
+            title: Optional[str],
+            year: Optional[int],
+            title_identity: Optional[str],
+        ) -> dict[str, Any]:
+            group_ids: Set[str] = set()
+            guid_value = None
+            if show_guid:
+                guid_value = str(show_guid)
+                if guid_value in guid_index:
+                    group_ids.add(guid_index[guid_value])
+            key_value = None
+            if show_key:
+                key_value = str(show_key)
+                if key_value in key_index:
+                    group_ids.add(key_index[key_value])
+            if title_identity and title_identity in title_index:
+                group_ids.add(title_index[title_identity])
+
+            if not group_ids:
+                group_id = f"group-{len(show_groups) + 1}"
+                show_groups[group_id] = {
+                    "show_guid": None,
+                    "show_key": None,
+                    "title": None,
+                    "year": None,
+                    "title_identity": None,
+                    "match_guids": set(),
+                    "match_keys": set(),
+                    "prefs": {},
+                }
+            else:
+                group_id = sorted(group_ids)[0]
+                for merge_id in sorted(group_ids)[1:]:
+                    _merge_groups(group_id, merge_id)
+
+            group = show_groups[group_id]
+
+            if guid_value:
+                group["match_guids"].add(guid_value)
+                if not guid_value.startswith("title:"):
+                    group.setdefault("show_guid", guid_value)
+                    guid_index[guid_value] = group_id
+                else:
+                    title_identity = title_identity or _normalize_stored_identity(guid_value)
+            if key_value:
+                group["match_keys"].add(key_value)
+                group.setdefault("show_key", key_value)
+                key_index[key_value] = group_id
+            if title_identity:
+                group.setdefault("title_identity", title_identity)
+                title_index[title_identity] = group_id
+            if title and not group.get("title"):
+                group["title"] = title
+                group["year"] = year
+
+            return group
+
+        for show_key, show_guid, show_title in notification_rows:
+            title = None
+            year = None
+            if show_title:
+                title, year = _extract_show_year_from_title(show_title)
+            title_identity = normalize_show_identity(title, year) if title else None
+            _ensure_group(
+                show_guid=str(show_guid) if show_guid else None,
+                show_key=str(show_key) if show_key else None,
+                title=title,
+                year=year,
+                title_identity=title_identity,
+            )
+
+        for pref in preferences:
+            pref_guid = str(pref.show_guid) if pref.show_guid else None
+            pref_key = str(pref.show_key) if pref.show_key else None
+            title_identity = None
+            if pref_guid and pref_guid.startswith("title:"):
+                title_identity = _normalize_stored_identity(pref_guid)
+            group = _ensure_group(
+                show_guid=pref_guid,
+                show_key=pref_key,
+                title=None,
+                year=None,
+                title_identity=title_identity,
+            )
+            if pref.id is not None:
+                group["prefs"].setdefault(pref.id, pref)
 
         updated_count = 0
         scanned_count = 0
         pending_updates = 0
         batch_size = 50
 
-        for pref in preferences:
-            identifier_candidates = [c for c in (pref.show_key, pref.show_guid) if c]
-            last_notified = None
-            show_title = None
-            for candidate in identifier_candidates:
-                candidate_key = str(candidate)
-                if candidate_key in last_notification_map:
-                    last_notified, show_title = last_notification_map[candidate_key]
-                    if last_notified:
-                        break
+        for group in show_groups.values():
+            title = group.get("title")
+            year = group.get("year")
+            if not title and group.get("title_identity"):
+                title, year = _parse_fallback_identity(group["title_identity"])
+            show_key = group.get("show_key")
 
-            if last_notified and last_notified.tzinfo is not None:
-                last_notified = last_notified.astimezone(timezone.utc).replace(tzinfo=None)
-            has_recent_notification = bool(last_notified and last_notified >= cutoff_dt)
-            title_from_notification = None
-            year_from_notification = None
-            if show_title:
-                title_from_notification, year_from_notification = _extract_show_year_from_title(show_title)
-            normalized_identity = ""
-            for stored_value in (pref.show_guid, pref.show_key):
-                normalized_identity = _normalize_stored_identity(stored_value)
-                if normalized_identity:
-                    break
-            title_from_identity, year_from_identity = _parse_fallback_identity(normalized_identity)
-            has_mismatched_pair = (pref.show_key is None) != (pref.show_guid is None)
-            needs_reconcile = (
-                ignore_recent_cutoff
-                or not has_recent_notification
-                or has_mismatched_pair
-                or (pref.show_guid and pref.show_guid.startswith("title:"))
-            )
-
-            search_results = None
-            if not needs_reconcile:
+            if not show_key and not title:
                 continue
 
             scanned_count += 1
 
-            title = title_from_notification or title_from_identity
-            year = year_from_notification if title_from_notification else year_from_identity
-            if title_from_notification and year is None and year_from_identity is not None:
-                year = year_from_identity
-            if not title and pref.show_key:
-                fetched_item = None
+            matched_show = None
+            if show_key:
                 try:
-                    fetched_item = tv_section.get(pref.show_key)
+                    matched_show = tv_section.get(show_key)
                 except Exception:
                     try:
-                        show_key = str(pref.show_key)
                         fetch_path = (
                             show_key
                             if "/library/metadata/" in show_key
                             else f"/library/metadata/{show_key}"
                         )
-                        fetched_item = plex.fetchItem(fetch_path)
+                        matched_show = plex.fetchItem(fetch_path)
                     except Exception as exc:
                         app.logger.warning(
                             "Preference reconciliation failed to fetch show metadata for key '%s': %s",
-                            pref.show_key,
+                            show_key,
                             exc,
                         )
-                if fetched_item:
-                    new_show_key = str(getattr(fetched_item, "ratingKey", "") or "") or None
-                    new_show_guid = _extract_show_guid_from_metadata(fetched_item)
-                    if new_show_key and pref.show_key != new_show_key:
-                        pref.show_key = new_show_key
-                    if new_show_guid and pref.show_guid != new_show_guid:
-                        pref.show_guid = new_show_guid
-                    title = getattr(fetched_item, "title", None)
-                    year = getattr(fetched_item, "year", None)
-                    if title and year is None:
-                        title, year = _extract_show_year_from_title(title)
-            if not title:
+
+            if not matched_show and title:
+                try:
+                    if year:
+                        search_results = tv_section.search(title=title, year=year, libtype="show")
+                    else:
+                        search_results = tv_section.search(title=title, libtype="show")
+                except Exception as exc:
+                    app.logger.warning(f"Preference reconciliation search failed for '{title}': {exc}")
+                    continue
+
+                if not search_results:
+                    continue
+
+                title_key = _normalize_title_for_match(title)
+                for show in search_results:
+                    if year and getattr(show, "year", None) == year:
+                        matched_show = show
+                        break
+                    if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
+                        matched_show = show
+                        break
+                if not matched_show:
+                    matched_show = search_results[0]
+
+            if not matched_show:
+                continue
+
+            new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
+            new_show_guid = _extract_show_guid_from_metadata(matched_show)
+
+            for pref in group["prefs"].values():
+                if new_show_key and pref.show_key != new_show_key:
+                    pref.show_key = new_show_key
+                if new_show_guid and pref.show_guid != new_show_guid:
+                    pref.show_guid = new_show_guid
                 if db.session.is_modified(pref, include_collections=False):
                     updated_count += 1
                     pending_updates += 1
@@ -376,52 +479,6 @@ def reconcile_user_preferences(
                             app.logger.warning(f"Preference reconciliation failed to commit updates: {exc}")
                             db.session.rollback()
                             return
-                continue
-            try:
-                if search_results is None:
-                    if year:
-                        search_results = tv_section.search(title=title, year=year, libtype="show")
-                    else:
-                        search_results = tv_section.search(title=title, libtype="show")
-            except Exception as exc:
-                app.logger.warning(f"Preference reconciliation search failed for '{title}': {exc}")
-                continue
-
-            if not search_results:
-                continue
-
-            title_key = _normalize_title_for_match(title)
-            matched_show = None
-            for show in search_results:
-                if year and getattr(show, "year", None) == year:
-                    matched_show = show
-                    break
-                if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
-                    matched_show = show
-                    break
-
-            if not matched_show:
-                matched_show = search_results[0]
-
-            new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-            new_show_guid = _extract_show_guid_from_metadata(matched_show)
-
-            if new_show_key and pref.show_key != new_show_key:
-                pref.show_key = new_show_key
-            if new_show_guid and pref.show_guid != new_show_guid:
-                pref.show_guid = new_show_guid
-
-            if db.session.is_modified(pref, include_collections=False):
-                updated_count += 1
-                pending_updates += 1
-                if pending_updates >= batch_size:
-                    try:
-                        db.session.commit()
-                        pending_updates = 0
-                    except Exception as exc:
-                        app.logger.warning(f"Preference reconciliation failed to commit updates: {exc}")
-                        db.session.rollback()
-                        return
 
         if pending_updates:
             try:
@@ -432,7 +489,7 @@ def reconcile_user_preferences(
                 return
 
         app.logger.info(
-            "Preference reconciliation (%s) updated %s of %s scanned preferences.",
+            "Preference reconciliation (%s) updated %s preferences across %s scanned shows.",
             run_reason,
             updated_count,
             scanned_count,
