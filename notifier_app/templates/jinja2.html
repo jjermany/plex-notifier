@@ -305,7 +305,7 @@
                                 {% endif %}
                               </td>
                               <td valign="top" class="content-column mobile-spacing-sm" style="padding:16px 16px 16px 0;">
-                                <h3 class="mobile-h3" style="margin:0 0 8px; font-size:17px; font-weight:600; line-height:1.3;">
+                                <h3 class="mobile-h3" style="margin:0; font-size:17px; font-weight:600; line-height:1.3; display:block; mso-line-height-rule:exactly;">
                                   {% set preferred_ep_link = ep.episode_mobile_link or ep.episode_link %}
                                   {% if preferred_ep_link %}
                                   <a href="{{ preferred_ep_link }}"
@@ -318,7 +318,7 @@
                                   <span style="color:#ffffff;"> - {{ ep.ep_title }}</span>
                                   {% endif %}
                                 </h3>
-                                <p class="mobile-body" style="margin:0; font-size:14px; color:#cccccc; line-height:1.5;">
+                                <p class="mobile-body" style="margin:0; padding-top:8px; font-size:14px; color:#cccccc; line-height:1.5; display:block; mso-line-height-rule:exactly;">
                                   {{ ep.synopsis }}
                                 </p>
                               </td>
