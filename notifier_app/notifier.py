@@ -41,7 +41,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences, Notification, db
+from .config import Settings, UserPreferences, Notification, EpisodeFirstSeen, db
 from sqlalchemy import or_
 
 # Logging
@@ -185,6 +185,22 @@ def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMI
     # Cache the result
     notification_cache[normalized_email] = notified.copy()
     return notified
+
+
+def _coerce_plex_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if not value:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _get_episode_availability_datetime(episode: Episode) -> Optional[datetime]:
+    for attr in ("originallyAvailableAt", "availableAt"):
+        candidate = getattr(episode, attr, None)
+        if candidate:
+            return _coerce_plex_datetime(candidate)
+    return None
 
 
 def _parse_fallback_identity(identity: str | None) -> tuple[str | None, int | None]:
@@ -612,6 +628,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
         interval = override_interval_minutes or s.notify_interval or 30
         cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
+        now_dt = datetime.now(timezone.utc)
 
         machine_id = None
 
@@ -621,10 +638,59 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             tv = plex.library.section('TV Shows')
             all_eps = tv.search(libtype='episode')
 
-            recent_eps = [
-                ep for ep in all_eps
-                if isinstance(ep, Episode) and ep.addedAt and ep.addedAt.astimezone(timezone.utc) >= cutoff_dt
+            episode_keys = [
+                str(ep.ratingKey)
+                for ep in all_eps
+                if isinstance(ep, Episode) and ep.ratingKey is not None
             ]
+            existing_first_seen: Dict[str, datetime] = {}
+            if episode_keys:
+                first_seen_rows = (
+                    EpisodeFirstSeen.query
+                    .filter(EpisodeFirstSeen.episode_key.in_(episode_keys))
+                    .all()
+                )
+                existing_first_seen = {
+                    row.episode_key: _coerce_plex_datetime(row.first_seen_at)
+                    for row in first_seen_rows
+                }
+
+            new_first_seen_rows: List[EpisodeFirstSeen] = []
+            recent_eps: List[Episode] = []
+            for ep in all_eps:
+                if not isinstance(ep, Episode):
+                    continue
+
+                availability_dt = _get_episode_availability_datetime(ep)
+                availability_recent = availability_dt is not None and availability_dt >= cutoff_dt
+
+                rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
+                first_seen_at = None
+                if rating_key:
+                    first_seen_at = existing_first_seen.get(rating_key)
+                    if not first_seen_at:
+                        first_seen_at = now_dt
+                        new_first_seen_rows.append(
+                            EpisodeFirstSeen(
+                                episode_key=rating_key,
+                                first_seen_at=first_seen_at,
+                            )
+                        )
+
+                first_seen_recent = first_seen_at is not None and first_seen_at >= cutoff_dt
+                if availability_recent or first_seen_recent:
+                    recent_eps.append(ep)
+
+            if new_first_seen_rows:
+                try:
+                    db.session.add_all(new_first_seen_rows)
+                    db.session.commit()
+                except Exception as exc:
+                    current_app.logger.warning(
+                        "Failed to persist episode first-seen records: %s",
+                        exc,
+                    )
+                    db.session.rollback()
             local_time = cutoff_dt.astimezone()
             current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
 
