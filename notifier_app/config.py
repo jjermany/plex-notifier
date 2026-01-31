@@ -60,6 +60,13 @@ class Notification(db.Model):
     )
 
 
+class EpisodeFirstSeen(db.Model):
+    __tablename__ = 'episode_first_seen'
+
+    episode_key = db.Column(db.String, primary_key=True)
+    first_seen_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class HealthCheck(db.Model):
     __tablename__ = 'health_checks'
 
