@@ -172,14 +172,87 @@ def create_app():
         # Migrate user_preferences table to add unique constraint if it doesn't exist
         if 'user_preferences' in inspector.get_table_names():
             try:
-                # Try to create the unique constraint if it doesn't exist
-                # SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we need to check if constraint exists
                 constraints = inspector.get_unique_constraints('user_preferences')
                 constraint_names = [c['name'] for c in constraints]
                 if 'uq_email_show_key' not in constraint_names:
-                    # For SQLite, we'd need to recreate the table, but since we're using db.create_all()
-                    # it should handle this. For now, just log a warning.
-                    app.logger.warning("Legacy user_preferences table detected. New unique constraints will apply to new records.")
+                    if db.engine.dialect.name == "sqlite":
+                        try:
+                            existing_cols = {c['name'] for c in inspector.get_columns('user_preferences')}
+                            has_show_guid = 'show_guid' in existing_cols
+                            order_clause = (
+                                "(show_guid IS NOT NULL) DESC, id DESC"
+                                if has_show_guid
+                                else "id DESC"
+                            )
+                            show_guid_select = "show_guid" if has_show_guid else "NULL AS show_guid"
+                            with db.engine.begin() as conn:
+                                conn.execute(text("""
+                                    CREATE TABLE user_preferences_new (
+                                        id INTEGER PRIMARY KEY,
+                                        email VARCHAR NOT NULL,
+                                        global_opt_out BOOLEAN,
+                                        show_key VARCHAR,
+                                        show_guid VARCHAR,
+                                        show_opt_out BOOLEAN,
+                                        CONSTRAINT uq_email_show_key UNIQUE (email, show_key)
+                                    )
+                                """))
+                                conn.execute(text("""
+                                    INSERT INTO user_preferences_new (
+                                        id,
+                                        email,
+                                        global_opt_out,
+                                        show_key,
+                                        show_guid,
+                                        show_opt_out
+                                    )
+                                    SELECT
+                                        id,
+                                        email,
+                                        global_opt_out,
+                                        show_key,
+                                        show_guid,
+                                        show_opt_out
+                                    FROM (
+                                        SELECT
+                                            id,
+                                            email,
+                                            global_opt_out,
+                                            show_key,
+                                            {show_guid_select},
+                                            show_opt_out,
+                                            ROW_NUMBER() OVER (
+                                                PARTITION BY email, show_key
+                                                ORDER BY {order_clause}
+                                            ) AS row_rank
+                                        FROM user_preferences
+                                    )
+                                    WHERE row_rank = 1
+                                """.format(
+                                    show_guid_select=show_guid_select,
+                                    order_clause=order_clause,
+                                )))
+                                conn.execute(text("DROP TABLE user_preferences"))
+                                conn.execute(text("ALTER TABLE user_preferences_new RENAME TO user_preferences"))
+                                conn.execute(text(
+                                    "CREATE INDEX idx_email_show_key ON user_preferences (email, show_key)"
+                                ))
+                                conn.execute(text(
+                                    "CREATE INDEX idx_email_show_guid ON user_preferences (email, show_guid)"
+                                ))
+                            app.logger.info(
+                                "Rebuilt user_preferences table to add missing unique constraint uq_email_show_key."
+                            )
+                            inspector = inspect(db.engine)
+                        except Exception as exc:
+                            app.logger.warning(
+                                f"Failed to rebuild user_preferences table for unique constraint migration; rolling back. {exc}"
+                            )
+                    else:
+                        app.logger.warning(
+                            "Legacy user_preferences table detected without uq_email_show_key. "
+                            "Manual migration required for non-SQLite database."
+                        )
             except Exception as e:
                 app.logger.warning(f"Could not check user_preferences constraints: {e}")
 
