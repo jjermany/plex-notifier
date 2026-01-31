@@ -143,7 +143,17 @@ def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMI
             .all()
         )
         for notif in recent_notifications:
-            notified.add(f"{notif.show_key}|S{notif.season}E{notif.episode}")
+            season_episode = f"S{notif.season}E{notif.episode}"
+            if notif.episode_key:
+                notified.add(str(notif.episode_key))
+            if notif.show_guid:
+                notified.add(f"{notif.show_guid}|{season_episode}")
+            if notif.show_key:
+                notified.add(f"{notif.show_key}|{season_episode}")
+            if notif.show_title:
+                fallback_identity = normalize_show_identity(notif.show_title)
+                if fallback_identity:
+                    notified.add(f"{fallback_identity}|{season_episode}")
     except Exception as e:
         current_app.logger.warning(f"Could not query database for notifications: {e}")
 
@@ -682,11 +692,21 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue
 
-                show_key_for_id = show_key_str or fallback_identity
-                if not show_key_for_id:
+                season_episode = f"S{ep.parentIndex}E{ep.index}"
+                candidate_ids: List[str] = []
+                if ep.ratingKey:
+                    candidate_ids.append(str(ep.ratingKey))
+                if raw_show_guid:
+                    candidate_ids.append(f"{raw_show_guid}|{season_episode}")
+                elif show_guid:
+                    candidate_ids.append(f"{show_guid}|{season_episode}")
+                if show_key_str:
+                    candidate_ids.append(f"{show_key_str}|{season_episode}")
+                if fallback_identity:
+                    candidate_ids.append(f"{fallback_identity}|{season_episode}")
+                if not candidate_ids:
                     continue
-                ep_id = f"{show_key_for_id}|S{ep.parentIndex}E{ep.index}"
-                if ep_id in recent_notified:
+                if any(candidate in recent_notified for candidate in candidate_ids):
                     continue
 
                 watchable.append({
