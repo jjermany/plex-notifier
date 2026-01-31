@@ -201,6 +201,21 @@ def _parse_fallback_identity(identity: str | None) -> tuple[str | None, int | No
     return title or None, year
 
 
+def _normalize_stored_identity(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    raw_value = str(value).strip()
+    if not raw_value:
+        return ""
+    lowered = raw_value.lower()
+    if lowered.startswith("title:"):
+        return lowered
+    year_match = re.search(r"\|year:(\d{4})$", lowered)
+    year = int(year_match.group(1)) if year_match else None
+    title_part = raw_value[:year_match.start()] if year_match else raw_value
+    return normalize_show_identity(title_part, year)
+
+
 def _extract_show_year_from_title(title: str | None) -> tuple[str | None, int | None]:
     if not title:
         return None, None
@@ -250,6 +265,7 @@ def reconcile_user_preferences(
             return
 
         cutoff_dt = datetime.utcnow() - timedelta(days=cutoff_days)
+        ignore_recent_cutoff = run_reason == "startup"
         last_notification_map: dict[str, tuple[datetime | None, str | None]] = {}
         notification_rows = (
             db.session.query(
@@ -273,6 +289,8 @@ def reconcile_user_preferences(
 
         updated_count = 0
         scanned_count = 0
+        pending_updates = 0
+        batch_size = 50
 
         for pref in preferences:
             identifier_candidates = [c for c in (pref.show_key, pref.show_guid) if c]
@@ -292,59 +310,30 @@ def reconcile_user_preferences(
             year_from_notification = None
             if show_title:
                 title_from_notification, year_from_notification = _extract_show_year_from_title(show_title)
+            normalized_identity = ""
+            for stored_value in (pref.show_guid, pref.show_key):
+                normalized_identity = _normalize_stored_identity(stored_value)
+                if normalized_identity:
+                    break
+            title_from_identity, year_from_identity = _parse_fallback_identity(normalized_identity)
             has_mismatched_pair = (pref.show_key is None) != (pref.show_guid is None)
             needs_reconcile = (
-                not has_recent_notification
+                ignore_recent_cutoff
+                or not has_recent_notification
                 or has_mismatched_pair
                 or (pref.show_guid and pref.show_guid.startswith("title:"))
             )
 
             search_results = None
-            if not needs_reconcile and title_from_notification:
-                try:
-                    if year_from_notification:
-                        search_results = tv_section.search(
-                            title=title_from_notification,
-                            year=year_from_notification,
-                            libtype="show",
-                        )
-                    else:
-                        search_results = tv_section.search(
-                            title=title_from_notification,
-                            libtype="show",
-                        )
-                except Exception as exc:
-                    app.logger.warning(
-                        "Preference reconciliation consistency check failed for '%s': %s",
-                        title_from_notification,
-                        exc,
-                    )
-                    search_results = None
-
-                if search_results:
-                    result_keys = {
-                        str(getattr(show, "ratingKey"))
-                        for show in search_results
-                        if getattr(show, "ratingKey", None)
-                    }
-                    result_guids = {
-                        guid
-                        for show in search_results
-                        if (guid := _extract_show_guid_from_metadata(show))
-                    }
-                    if (pref.show_key and str(pref.show_key) not in result_keys) or (
-                        pref.show_guid and str(pref.show_guid) not in result_guids
-                    ):
-                        needs_reconcile = True
-
             if not needs_reconcile:
                 continue
 
             scanned_count += 1
 
-            title, year = _parse_fallback_identity(pref.show_guid)
-            if not title and title_from_notification:
-                title, year = title_from_notification, year_from_notification
+            title = title_from_notification or title_from_identity
+            year = year_from_notification if title_from_notification else year_from_identity
+            if title_from_notification and year is None and year_from_identity is not None:
+                year = year_from_identity
             if not title and pref.show_key:
                 fetched_item = None
                 try:
@@ -378,6 +367,15 @@ def reconcile_user_preferences(
             if not title:
                 if db.session.is_modified(pref, include_collections=False):
                     updated_count += 1
+                    pending_updates += 1
+                    if pending_updates >= batch_size:
+                        try:
+                            db.session.commit()
+                            pending_updates = 0
+                        except Exception as exc:
+                            app.logger.warning(f"Preference reconciliation failed to commit updates: {exc}")
+                            db.session.rollback()
+                            return
                 continue
             try:
                 if search_results is None:
@@ -415,8 +413,17 @@ def reconcile_user_preferences(
 
             if db.session.is_modified(pref, include_collections=False):
                 updated_count += 1
+                pending_updates += 1
+                if pending_updates >= batch_size:
+                    try:
+                        db.session.commit()
+                        pending_updates = 0
+                    except Exception as exc:
+                        app.logger.warning(f"Preference reconciliation failed to commit updates: {exc}")
+                        db.session.rollback()
+                        return
 
-        if updated_count:
+        if pending_updates:
             try:
                 db.session.commit()
             except Exception as exc:
@@ -1109,20 +1116,6 @@ def _user_has_subscription_fallback(
     show_title: Optional[str],
     show_year: Optional[int],
 ) -> Tuple[bool, List[UserPreferences]]:
-    def _normalize_stored_identity(value: Optional[str]) -> str:
-        if not value:
-            return ""
-        raw_value = value.strip()
-        if not raw_value:
-            return ""
-        lowered = raw_value.lower()
-        if lowered.startswith("title:"):
-            return lowered
-        year_match = re.search(r"\|year:(\d{4})$", lowered)
-        year = int(year_match.group(1)) if year_match else None
-        title_part = raw_value[:year_match.start()] if year_match else raw_value
-        return normalize_show_identity(title_part, year)
-
     def _preference_matches_identity(
         preference: UserPreferences,
         *,
