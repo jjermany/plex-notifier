@@ -10,13 +10,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from typing import List, Dict, Any, Set, Optional, Tuple
-from collections import deque, Counter
+from collections import Counter
 from logging.handlers import RotatingFileHandler
 from functools import lru_cache
 from cachetools import TTLCache
 
 from .logging_utils import TZFormatter
-from .utils import normalize_email, email_to_filename, normalize_show_identity, redact_email
+from .utils import normalize_email, email_to_filename, redact_email
 from .constants import (
     NOTIFICATION_HISTORY_LIMIT,
     NOTIFICATION_CACHE_TTL_SECONDS,
@@ -99,29 +99,8 @@ def _extract_show_guid(episode: Episode) -> Optional[str]:
     return None
 
 
-def _get_fallback_identity_for_episode(episode: Episode) -> str:
-    title = getattr(episode, "grandparentTitle", None)
-    year = getattr(episode, "grandparentYear", None)
-    if year is None:
-        year = getattr(episode, "year", None)
-    return normalize_show_identity(title, year)
-
-
-def _get_show_guid_for_episode(
-    episode: Episode,
-    *,
-    fallback_identity: Optional[str] = None,
-    prefer_fallback_identity: bool = False,
-) -> Optional[str]:
-    fallback_guid = fallback_identity or _get_fallback_identity_for_episode(episode)
-    if prefer_fallback_identity and fallback_guid:
-        return fallback_guid
-
-    guid = _extract_show_guid(episode)
-    if guid:
-        return guid
-
-    return fallback_guid or None
+def _get_show_guid_for_episode(episode: Episode) -> Optional[str]:
+    return _extract_show_guid(episode)
 
 
 def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMIT) -> Set[str]:
@@ -151,37 +130,8 @@ def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMI
                 notified.add(f"{notif.show_guid}|{season_episode}")
             if notif.show_key:
                 notified.add(f"{notif.show_key}|{season_episode}")
-            if notif.show_title:
-                fallback_identity = normalize_show_identity(notif.show_title)
-                if fallback_identity:
-                    notified.add(f"{fallback_identity}|{season_episode}")
     except Exception as e:
         current_app.logger.warning(f"Could not query database for notifications: {e}")
-
-    # Fallback to log file if database is empty (for backward compatibility)
-    if not notified:
-        filename = email_to_filename(email)
-        log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
-        log_path = os.path.join(log_dir, f"{filename}-notification.log")
-        if os.path.exists(log_path):
-            try:
-                with open(log_path, "r", encoding="utf-8") as f:
-                    lines = deque(f, maxlen=limit)
-                for line in lines:
-                    line = line.strip()
-                    if "Notified:" not in line:
-                        continue
-                    try:
-                        _, body = line.split("Notified:", 1)
-                        body = body.strip()
-                        key_part = body.split("[Key:", 1)[1]
-                        show_key, rest = key_part.split("]", 1)
-                        season_ep = rest.strip().split(" - ", 1)[0]
-                        notified.add(f"{show_key}|{season_ep}")
-                    except Exception:
-                        continue
-            except Exception:
-                pass
 
     # Cache the result
     notification_cache[normalized_email] = notified.copy()
@@ -202,35 +152,6 @@ def _get_episode_availability_datetime(episode: Episode) -> Optional[datetime]:
         if candidate:
             return _coerce_plex_datetime(candidate)
     return None
-
-
-def _parse_fallback_identity(identity: str | None) -> tuple[str | None, int | None]:
-    if not identity or not identity.startswith("title:"):
-        return None, None
-    title_part, _, year_part = identity.partition("|year:")
-    title = title_part.replace("title:", "").replace("-", " ").strip()
-    year = None
-    if year_part:
-        try:
-            year = int(year_part.strip())
-        except ValueError:
-            year = None
-    return title or None, year
-
-
-def _normalize_stored_identity(value: Optional[str]) -> str:
-    if not value:
-        return ""
-    raw_value = str(value).strip()
-    if not raw_value:
-        return ""
-    lowered = raw_value.lower()
-    if lowered.startswith("title:"):
-        return lowered
-    year_match = re.search(r"\|year:(\d{4})$", lowered)
-    year = int(year_match.group(1)) if year_match else None
-    title_part = raw_value[:year_match.start()] if year_match else raw_value
-    return normalize_show_identity(title_part, year)
 
 
 def _extract_show_year_from_title(title: str | None) -> tuple[str | None, int | None]:
@@ -395,11 +316,9 @@ def reconcile_user_preferences(
             for email, show_key, show_guid, show_title in notification_identity_rows:
                 normalized_email = normalize_email(email)
                 title, year = _extract_show_year_from_title(show_title)
-                title_identity = normalize_show_identity(title or show_title, year) if show_title else None
                 identity_key = (
                     str(show_guid) if show_guid else None,
                     str(show_key) if show_key else None,
-                    title_identity,
                 )
                 if normalized_email not in seen_identity_keys:
                     seen_identity_keys[normalized_email] = set()
@@ -412,14 +331,12 @@ def reconcile_user_preferences(
                         "show_key": str(show_key) if show_key else None,
                         "title": title or show_title,
                         "year": year,
-                        "title_identity": title_identity,
                     }
                 )
 
         show_groups: dict[str, dict[str, Any]] = {}
         guid_index: dict[str, str] = {}
         key_index: dict[str, str] = {}
-        title_index: dict[str, str] = {}
 
         def _merge_groups(primary_id: str, merge_id: str) -> None:
             if primary_id == merge_id:
@@ -432,9 +349,6 @@ def reconcile_user_preferences(
             for key_value in secondary["match_keys"]:
                 primary["match_keys"].add(key_value)
                 key_index[key_value] = primary_id
-            if secondary.get("title_identity"):
-                primary.setdefault("title_identity", secondary["title_identity"])
-                title_index[secondary["title_identity"]] = primary_id
             if secondary.get("show_guid") and not primary.get("show_guid"):
                 primary["show_guid"] = secondary["show_guid"]
             if secondary.get("show_key") and not primary.get("show_key"):
@@ -451,7 +365,6 @@ def reconcile_user_preferences(
             show_key: Optional[str],
             title: Optional[str],
             year: Optional[int],
-            title_identity: Optional[str],
         ) -> dict[str, Any]:
             group_ids: Set[str] = set()
             guid_value = None
@@ -464,8 +377,6 @@ def reconcile_user_preferences(
                 key_value = str(show_key)
                 if key_value in key_index:
                     group_ids.add(key_index[key_value])
-            if title_identity and title_identity in title_index:
-                group_ids.add(title_index[title_identity])
 
             if not group_ids:
                 group_id = f"group-{len(show_groups) + 1}"
@@ -474,7 +385,6 @@ def reconcile_user_preferences(
                     "show_key": None,
                     "title": None,
                     "year": None,
-                    "title_identity": None,
                     "match_guids": set(),
                     "match_keys": set(),
                     "prefs": {},
@@ -488,18 +398,12 @@ def reconcile_user_preferences(
 
             if guid_value:
                 group["match_guids"].add(guid_value)
-                if not guid_value.startswith("title:"):
-                    group.setdefault("show_guid", guid_value)
-                    guid_index[guid_value] = group_id
-                else:
-                    title_identity = title_identity or _normalize_stored_identity(guid_value)
+                group.setdefault("show_guid", guid_value)
+                guid_index[guid_value] = group_id
             if key_value:
                 group["match_keys"].add(key_value)
                 group.setdefault("show_key", key_value)
                 key_index[key_value] = group_id
-            if title_identity:
-                group.setdefault("title_identity", title_identity)
-                title_index[title_identity] = group_id
             if title and not group.get("title"):
                 group["title"] = title
                 group["year"] = year
@@ -511,27 +415,23 @@ def reconcile_user_preferences(
             year = None
             if show_title:
                 title, year = _extract_show_year_from_title(show_title)
-            title_identity = normalize_show_identity(title, year) if title else None
             _ensure_group(
                 show_guid=str(show_guid) if show_guid else None,
                 show_key=str(show_key) if show_key else None,
                 title=title,
                 year=year,
-                title_identity=title_identity,
             )
 
         for pref in preferences:
             pref_guid = str(pref.show_guid) if pref.show_guid else None
             pref_key = str(pref.show_key) if pref.show_key else None
-            title_identity = None
             if pref_guid and pref_guid.startswith("title:"):
-                title_identity = _normalize_stored_identity(pref_guid)
+                pref_guid = None
             group = _ensure_group(
                 show_guid=pref_guid,
                 show_key=pref_key,
                 title=None,
                 year=None,
-                title_identity=title_identity,
             )
             if pref.id is not None:
                 group["prefs"].setdefault(pref.id, pref)
@@ -549,9 +449,6 @@ def reconcile_user_preferences(
                 for value in (pref.show_key, pref.show_guid):
                     if value:
                         identity_set.add(str(value))
-                        normalized_identity = _normalize_stored_identity(value)
-                        if normalized_identity:
-                            identity_set.add(normalized_identity)
 
             for email, empty_prefs in prefs_by_email.items():
                 notification_entries = notification_entries_by_email.get(email, [])
@@ -566,7 +463,6 @@ def reconcile_user_preferences(
                         for identifier in (
                             entry.get("show_guid"),
                             entry.get("show_key"),
-                            entry.get("title_identity"),
                         )
                     )
                 ]
@@ -584,7 +480,6 @@ def reconcile_user_preferences(
                     unmatched_entries,
                     key=lambda entry: (
                         _normalize_title_for_match(entry.get("title")),
-                        entry.get("title_identity") or "",
                     ),
                 )
                 sorted_prefs = sorted(empty_prefs, key=lambda pref: pref.id or 0)
@@ -594,7 +489,6 @@ def reconcile_user_preferences(
                         show_key=entry.get("show_key"),
                         title=entry.get("title"),
                         year=entry.get("year"),
-                        title_identity=entry.get("title_identity"),
                     )
                     if pref.id is not None:
                         group["prefs"].setdefault(pref.id, pref)
@@ -607,8 +501,6 @@ def reconcile_user_preferences(
         for group in show_groups.values():
             title = group.get("title")
             year = group.get("year")
-            if not title and group.get("title_identity"):
-                title, year = _parse_fallback_identity(group["title_identity"])
             show_key = group.get("show_key")
 
             if not show_key and not title:
@@ -621,6 +513,8 @@ def reconcile_user_preferences(
             for pref in group["prefs"].values():
                 stored_key = str(pref.show_key) if pref.show_key else None
                 stored_guid = str(pref.show_guid) if pref.show_guid else None
+                if stored_guid and stored_guid.startswith("title:"):
+                    stored_guid = None
                 if stored_key:
                     candidate_show = _fetch_show_by_key(app, plex, tv_section, stored_key)
                     if candidate_show:
@@ -645,15 +539,8 @@ def reconcile_user_preferences(
                     continue
 
                 if stored_guid:
-                    search_title = None
-                    search_year = None
-                    if stored_guid.startswith("title:"):
-                        search_title, search_year = _parse_fallback_identity(stored_guid)
-                    if not search_title:
-                        search_title = title
-                        search_year = year
-                    if not search_title and group.get("title_identity"):
-                        search_title, search_year = _parse_fallback_identity(group["title_identity"])
+                    search_title = title
+                    search_year = year
                     candidate_show = _search_show_by_title(app, tv_section, search_title, search_year)
                     if candidate_show:
                         if not matched_show:
@@ -752,6 +639,8 @@ def reconcile_notifications(
         for notif in notifications:
             stored_key = str(notif.show_key) if notif.show_key else None
             stored_guid = str(notif.show_guid) if notif.show_guid else None
+            if stored_guid and stored_guid.startswith("title:"):
+                stored_guid = None
             if not stored_key and not stored_guid:
                 continue
 
@@ -778,13 +667,9 @@ def reconcile_notifications(
                             changes=changes,
                         )
             elif stored_guid:
-                search_title, search_year = None, None
-                if stored_guid.startswith("title:"):
-                    search_title, search_year = _parse_fallback_identity(stored_guid)
-                if not search_title:
-                    title, year = _extract_show_year_from_title(notif.show_title)
-                    search_title = title or notif.show_title
-                    search_year = year
+                title, year = _extract_show_year_from_title(notif.show_title)
+                search_title = title or notif.show_title
+                search_year = year
                 matched_show = _search_show_by_title(app, tv_section, search_title, search_year)
                 if matched_show:
                     canonical_key = str(getattr(matched_show, "ratingKey", "") or "") or None
@@ -1014,7 +899,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             recent_notified = _get_recent_notifications(canon)
             recent_show_keys: Set[str] = set()
             recent_show_guids: Set[str] = set()
-            recent_show_fallbacks: Set[str] = set()
             try:
                 recent_notifications = (
                     Notification.query
@@ -1028,10 +912,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                         recent_show_keys.add(str(notif.show_key))
                     if notif.show_guid:
                         recent_show_guids.add(str(notif.show_guid))
-                    if notif.show_title:
-                        fallback_identity = normalize_show_identity(notif.show_title)
-                        if fallback_identity:
-                            recent_show_fallbacks.add(fallback_identity)
             except Exception as exc:
                 current_app.logger.warning(
                     "Unable to load recent show identifiers for %s: %s",
@@ -1044,40 +924,21 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 show_key = ep.grandparentRatingKey
                 show_key_str = str(show_key) if show_key is not None else None
                 show_title = ep.grandparentTitle
-                show_year = getattr(ep, "grandparentYear", None)
-                if show_year is None:
-                    show_year = getattr(ep, "year", None)
-                fallback_identity = _get_fallback_identity_for_episode(ep)
                 raw_show_guid = _extract_show_guid(ep)
 
-                if not show_key_str and not fallback_identity:
+                if not show_key_str and not raw_show_guid:
                     continue
 
                 has_recent_notification_for_show = any(
                     candidate
-                    for candidate in (show_key_str, raw_show_guid, fallback_identity)
-                    if candidate and candidate in (recent_show_keys | recent_show_guids | recent_show_fallbacks)
+                    for candidate in (show_key_str, raw_show_guid)
+                    if candidate and candidate in (recent_show_keys | recent_show_guids)
                 )
-                mismatch_detected = False
-                if fallback_identity and has_recent_notification_for_show:
-                    if show_key_str and show_key_str not in recent_show_keys:
-                        mismatch_detected = True
-                    if raw_show_guid and raw_show_guid not in recent_show_guids:
-                        mismatch_detected = True
-                    if not show_key_str and not raw_show_guid:
-                        mismatch_detected = True
-
-                prefer_fallback_identity = mismatch_detected or (show_key_str is None and bool(fallback_identity))
-                fallback_log_needed = prefer_fallback_identity
-                show_guid = _get_show_guid_for_episode(
-                    ep,
-                    fallback_identity=fallback_identity,
-                    prefer_fallback_identity=prefer_fallback_identity,
-                )
+                show_guid = _get_show_guid_for_episode(ep)
 
                 # 🔒 Check per-show opt-out
                 show_pref = None
-                for guid_candidate in (raw_show_guid, fallback_identity):
+                for guid_candidate in (raw_show_guid,):
                     if not guid_candidate:
                         continue
                     show_pref = UserPreferences.query.filter_by(email=canon, show_guid=guid_candidate).first()
@@ -1104,7 +965,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                has_watched_show, history_status = _user_has_watched_show(s, uid, show_key, fallback_identity)
+                has_watched_show, history_status = _user_has_watched_show(s, uid, show_key)
                 if not has_watched_show:
                     if history_status in {"empty", "error"}:
                         has_subscription, fallback_preferences = _user_has_subscription_fallback(
@@ -1112,15 +973,12 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             user_email,
                             show_key_str,
                             raw_show_guid,
-                            fallback_identity,
-                            show_title,
-                            show_year,
                         )
                         if has_subscription:
                             current_app.logger.info(
                                 "Using subscription fallback for %s (%s) because Tautulli history was %s for %s.",
                                 show_title or "Unknown",
-                                show_key_str or fallback_identity or "unknown",
+                                show_key_str or raw_show_guid or "unknown",
                                 history_status,
                                 redacted_email,
                             )
@@ -1137,7 +995,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                         preference.show_guid = show_guid_update
                                         needs_commit = True
                         else:
-                            item_id = show_key_str or fallback_identity or "unknown"
+                            item_id = show_key_str or raw_show_guid or "unknown"
                             dedup_key = (canon, item_id)
                             if dedup_key not in processed_subscription_fallback_misses:
                                 subscription_fallback_miss_counts[show_title or item_id] += 1
@@ -1150,23 +1008,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                         redacted_email,
                                     )
                                 processed_subscription_fallback_misses.add(dedup_key)
-                    if not has_watched_show and has_recent_notification_for_show and fallback_identity:
-                        prefer_fallback_identity = True
-                        fallback_log_needed = True
-                        show_guid = _get_show_guid_for_episode(
-                            ep,
-                            fallback_identity=fallback_identity,
-                            prefer_fallback_identity=prefer_fallback_identity,
-                        )
-                        has_watched_show = True
                     if not has_watched_show:
                         continue
-                if prefer_fallback_identity and fallback_identity and fallback_log_needed:
-                    current_app.logger.info(
-                        "Fallback identity match used for show "
-                        f"{show_title or 'Unknown'} ({fallback_identity}) for {redacted_email}."
-                    )
-                    fallback_log_needed = False
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
@@ -1183,8 +1026,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     candidate_ids.append(f"{show_guid}|{season_episode}")
                 if show_key_str:
                     candidate_ids.append(f"{show_key_str}|{season_episode}")
-                if fallback_identity:
-                    candidate_ids.append(f"{fallback_identity}|{season_episode}")
                 if not candidate_ids:
                     continue
                 if any(candidate in recent_notified for candidate in candidate_ids):
@@ -1193,7 +1034,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 watchable.append({
                     "episode": ep,
                     "show_guid": show_guid,
-                    "fallback_identity": fallback_identity,
                 })
 
             if needs_commit:
@@ -1583,28 +1423,8 @@ def _user_has_subscription_fallback(
     alternate_email: Optional[str],
     show_key: Optional[str],
     show_guid: Optional[str],
-    fallback_identity: Optional[str],
-    show_title: Optional[str],
-    show_year: Optional[int],
 ) -> Tuple[bool, List[UserPreferences]]:
-    def _preference_matches_identity(
-        preference: UserPreferences,
-        *,
-        normalized_identity: str,
-        show_key_value: Optional[str],
-        show_guid_value: Optional[str],
-    ) -> bool:
-        if show_key_value and preference.show_key and str(preference.show_key) == str(show_key_value):
-            return True
-        if show_guid_value and preference.show_guid and str(preference.show_guid) == str(show_guid_value):
-            return True
-        for stored_value in (preference.show_key, preference.show_guid):
-            stored_identity = _normalize_stored_identity(stored_value)
-            if stored_identity and stored_identity == normalized_identity:
-                return True
-        return False
-
-    candidates = [candidate for candidate in (show_guid, show_key, fallback_identity) if candidate]
+    candidates = [candidate for candidate in (show_guid, show_key) if candidate]
 
     emails = [email]
     if alternate_email and alternate_email not in emails:
@@ -1634,80 +1454,6 @@ def _user_has_subscription_fallback(
             return False, []
         return True, active_preferences
 
-    cleaned_title, _ = _extract_show_year_from_title(show_title)
-    normalized_title = _normalize_title_for_match(cleaned_title or show_title)
-    if normalized_title:
-        title_preferences = (
-            UserPreferences.query
-            .filter(
-                UserPreferences.email.in_(emails),
-                UserPreferences.show_guid.startswith("title:"),
-            )
-            .all()
-        )
-        matched_preferences: List[UserPreferences] = []
-        opted_out_matches = 0
-
-        for preference in title_preferences:
-            stored_title, stored_year = _parse_fallback_identity(preference.show_guid)
-            stored_normalized = _normalize_title_for_match(stored_title)
-            if not stored_normalized or stored_normalized != normalized_title:
-                continue
-            if show_year is not None and stored_year is not None and stored_year != show_year:
-                continue
-            if preference.show_opt_out:
-                opted_out_matches += 1
-            else:
-                matched_preferences.append(preference)
-
-        if matched_preferences:
-            current_app.logger.info(
-                "Title-only subscription fallback match used for %s (%s).",
-                show_title or "Unknown",
-                normalized_title,
-            )
-            return True, matched_preferences
-
-        if opted_out_matches:
-            current_app.logger.info(
-                "Preference rows exist for user %s and normalized title %s but all are opted out",
-                emails,
-                normalized_title,
-            )
-
-    normalized_identity = fallback_identity or normalize_show_identity(show_title, show_year)
-    if not normalized_identity:
-        return False, []
-
-    title_preferences = UserPreferences.query.filter(UserPreferences.email.in_(emails)).all()
-    matched_preferences = []
-    opted_out_matches = 0
-
-    for preference in title_preferences:
-        for stored_value in (preference.show_key, preference.show_guid):
-            stored_identity = _normalize_stored_identity(stored_value)
-            if stored_identity and stored_identity == normalized_identity:
-                if preference.show_opt_out:
-                    opted_out_matches += 1
-                else:
-                    matched_preferences.append(preference)
-                break
-
-    if matched_preferences:
-        current_app.logger.info(
-            "Title-based subscription fallback match used for %s (%s).",
-            show_title or "Unknown",
-            normalized_identity,
-        )
-        return True, matched_preferences
-
-    if opted_out_matches:
-        current_app.logger.info(
-            "Preference rows exist for user %s and normalized title %s but all are opted out",
-            emails,
-            normalized_identity,
-        )
-
     notification_matches_identity = False
     try:
         notification_rows = Notification.query.filter(Notification.email.in_(emails)).all()
@@ -1718,13 +1464,6 @@ def _user_has_subscription_fallback(
             if show_guid and notification.show_guid and str(notification.show_guid) == str(show_guid):
                 notification_matches_identity = True
                 break
-            if notification.show_title:
-                notif_title, notif_year = _extract_show_year_from_title(notification.show_title)
-                effective_year = notif_year if notif_year is not None else show_year
-                notif_identity = normalize_show_identity(notif_title or notification.show_title, effective_year)
-                if notif_identity and notif_identity == normalized_identity:
-                    notification_matches_identity = True
-                    break
     except Exception as exc:
         current_app.logger.warning(
             "Unable to query notification history for fallback subscription check: %s",
@@ -1737,31 +1476,26 @@ def _user_has_subscription_fallback(
             UserPreferences.show_opt_out.is_(True),
         ).all()
         opted_out = any(
-            _preference_matches_identity(
-                preference,
-                normalized_identity=normalized_identity,
-                show_key_value=show_key,
-                show_guid_value=show_guid,
-            )
+            (show_key and preference.show_key and str(preference.show_key) == str(show_key))
+            or (show_guid and preference.show_guid and str(preference.show_guid) == str(show_guid))
             for preference in opt_out_preferences
         )
         if opted_out:
             current_app.logger.info(
                 "Notification history matched %s but user %s has opted out.",
-                normalized_identity,
+                show_key or show_guid or "unknown",
                 emails,
             )
             return False, []
         synthetic_preference = UserPreferences(
             email=emails[0],
             show_key=show_key,
-            show_guid=show_guid or normalized_identity,
+            show_guid=show_guid,
             show_opt_out=False,
         )
         current_app.logger.info(
-            "Notification history subscription fallback match used for %s (%s).",
-            show_title or "Unknown",
-            normalized_identity,
+            "Notification history subscription fallback match used for %s.",
+            show_key or show_guid or "unknown",
         )
         return True, [synthetic_preference]
     return False, []
@@ -1771,7 +1505,6 @@ def _user_has_watched_show(
     s: Settings,
     user_id: int,
     grandparent_rating_key: Any,
-    fallback_identity: Optional[str] = None,
 ) -> Tuple[bool, str]:
     def _coerce_percent(value: Any) -> Optional[float]:
         if value is None:
@@ -1858,16 +1591,6 @@ def _user_has_watched_show(
                 gp_key = str(item.get('grandparent_rating_key'))
                 if grandparent_rating_key is not None and gp_key == grandparent_key_str:
                     if _is_affirmative_watched(watched_status, completion_percent):
-                        return True, "available"
-                if fallback_identity:
-                    item_identity = normalize_show_identity(
-                        item.get('grandparent_title'),
-                        item.get('grandparent_year') or item.get('year'),
-                    )
-                    if item_identity == fallback_identity and _is_affirmative_watched(
-                        watched_status,
-                        completion_percent,
-                    ):
                         return True, "available"
 
             records_filtered = payload.get('recordsFiltered')
