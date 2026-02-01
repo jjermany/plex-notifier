@@ -188,6 +188,41 @@ def _coerce_plex_datetime(value: Optional[datetime]) -> Optional[datetime]:
     return value.astimezone(timezone.utc)
 
 
+def _notification_completeness_score(notification: Notification) -> int:
+    identifiers = (
+        notification.show_guid,
+        notification.tvdb_id,
+        notification.tmdb_id,
+        notification.imdb_id,
+        notification.plex_guid,
+        notification.episode_key,
+    )
+    return sum(1 for value in identifiers if value)
+
+
+def _select_notification_to_keep(
+    current: Notification,
+    conflict: Notification,
+) -> Tuple[Notification, str]:
+    current_score = _notification_completeness_score(current)
+    conflict_score = _notification_completeness_score(conflict)
+    if current_score != conflict_score:
+        keep = current if current_score > conflict_score else conflict
+        reason = f"completeness {current_score} vs {conflict_score}"
+        return keep, reason
+
+    current_ts = _coerce_plex_datetime(current.timestamp) or datetime.min.replace(tzinfo=timezone.utc)
+    conflict_ts = _coerce_plex_datetime(conflict.timestamp) or datetime.min.replace(tzinfo=timezone.utc)
+    if current_ts != conflict_ts:
+        keep = current if current_ts > conflict_ts else conflict
+        reason = f"timestamp {current_ts.isoformat()} vs {conflict_ts.isoformat()}"
+        return keep, reason
+
+    keep = current if (current.id or 0) >= (conflict.id or 0) else conflict
+    reason = "tie-breaker by id"
+    return keep, reason
+
+
 def _get_episode_availability_datetime(episode: Episode) -> Optional[datetime]:
     for attr in ("originallyAvailableAt", "availableAt"):
         candidate = getattr(episode, attr, None)
@@ -1141,15 +1176,36 @@ def reconcile_notifications(
                             Notification.id != notif.id,
                         ).first()
                     if conflict:
-                        missing_identifier_skipped += 1
+                        keep, reason = _select_notification_to_keep(notif, conflict)
+                        if keep is conflict:
+                            missing_identifier_skipped += 1
+                            app.logger.info(
+                                "Notification reconciliation deleted notification %s in favor of %s: "
+                                "target show_key=%s conflict for email=%s season=%s episode=%s (reason=%s).",
+                                notif.id if notif.id is not None else "unknown",
+                                conflict.id if conflict.id is not None else "unknown",
+                                new_show_key,
+                                notif.email,
+                                notif.season,
+                                notif.episode,
+                                reason,
+                            )
+                            db.session.delete(notif)
+                            pending_updates += 1
+                            continue
                         app.logger.info(
-                            "Notification reconciliation skipped notification %s: "
-                            "target show_key=%s would conflict with notification %s.",
+                            "Notification reconciliation deleted conflicting notification %s: "
+                            "keeping notification %s for target show_key=%s email=%s season=%s episode=%s (reason=%s).",
+                            conflict.id if conflict.id is not None else "unknown",
                             notif.id if notif.id is not None else "unknown",
                             new_show_key,
-                            conflict.id if conflict.id is not None else "unknown",
+                            notif.email,
+                            notif.season,
+                            notif.episode,
+                            reason,
                         )
-                        continue
+                        db.session.delete(conflict)
+                        pending_updates += 1
                     notif.show_key = new_show_key
                 if new_show_guid and notif.show_guid != new_show_guid:
                     notif.show_guid = new_show_guid
@@ -1249,14 +1305,35 @@ def reconcile_notifications(
                         Notification.id != notif.id,
                     ).first()
                 if conflict:
+                    keep, reason = _select_notification_to_keep(notif, conflict)
+                    if keep is conflict:
+                        app.logger.info(
+                            "Notification reconciliation deleted notification %s in favor of %s: "
+                            "target show_key=%s conflict for email=%s season=%s episode=%s (reason=%s).",
+                            notif.id if notif.id is not None else "unknown",
+                            conflict.id if conflict.id is not None else "unknown",
+                            new_show_key,
+                            notif.email,
+                            notif.season,
+                            notif.episode,
+                            reason,
+                        )
+                        db.session.delete(notif)
+                        pending_updates += 1
+                        continue
                     app.logger.info(
-                        "Notification reconciliation skipped notification %s: "
-                        "target show_key=%s would conflict with notification %s.",
+                        "Notification reconciliation deleted conflicting notification %s: "
+                        "keeping notification %s for target show_key=%s email=%s season=%s episode=%s (reason=%s).",
+                        conflict.id if conflict.id is not None else "unknown",
                         notif.id if notif.id is not None else "unknown",
                         new_show_key,
-                        conflict.id if conflict.id is not None else "unknown",
+                        notif.email,
+                        notif.season,
+                        notif.episode,
+                        reason,
                     )
-                    continue
+                    db.session.delete(conflict)
+                    pending_updates += 1
                 notif.show_key = new_show_key
             if new_show_guid and notif.show_guid != new_show_guid:
                 notif.show_guid = new_show_guid
