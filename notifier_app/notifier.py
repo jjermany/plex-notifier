@@ -1136,7 +1136,7 @@ def reconcile_notifications(
 
             scanned_count += 1
             title, year = _extract_show_year_from_title(notif.show_title)
-            matched_show, _ = _resolve_show_match(
+            matched_show, failure_reason = _resolve_show_match(
                 app,
                 plex,
                 tv_section,
@@ -1150,6 +1150,16 @@ def reconcile_notifications(
             )
 
             if not matched_show:
+                app.logger.info(
+                    "Notification reconciliation could not resolve show match for notification %s "
+                    "(record_type=\"Notification\"): stored_key=%s stored_guid=%s title='%s'%s reason=%s.",
+                    notif.id if notif.id is not None else "unknown",
+                    stored_key or "None",
+                    stored_guid or "None",
+                    title or notif.show_title or "",
+                    f" ({year})" if year else "",
+                    failure_reason,
+                )
                 continue
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
