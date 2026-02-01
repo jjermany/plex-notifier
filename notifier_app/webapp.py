@@ -569,29 +569,43 @@ def create_app():
             .all()
         )
 
+        def _merge_show_entry(target, source):
+            if source.get('last_notified'):
+                if not target.get('last_notified') or source['last_notified'] > target['last_notified']:
+                    target['last_notified'] = source['last_notified']
+            for key in ('show_guid', 'show_key', 'show_fallback_id'):
+                if source.get(key) and not target.get(key):
+                    target[key] = source[key]
+            if source.get('title') and not target.get('title'):
+                target['title'] = source['title']
+
         for show_key, show_guid, show_title, last_notified in show_latest:
             fallback_id = normalize_show_identity(show_title)
             show_id = show_guid or fallback_id or show_key
-            if show_id in show_map:
-                if last_notified and show_map[show_id]['last_notified']:
-                    if last_notified > show_map[show_id]['last_notified']:
-                        show_map[show_id]['last_notified'] = last_notified
-                elif last_notified:
-                    show_map[show_id]['last_notified'] = last_notified
-                if show_guid and not show_map[show_id]['show_guid']:
-                    show_map[show_id]['show_guid'] = show_guid
-                if show_key and not show_map[show_id]['show_key']:
-                    show_map[show_id]['show_key'] = show_key
-                if fallback_id and not show_map[show_id].get('show_fallback_id'):
-                    show_map[show_id]['show_fallback_id'] = fallback_id
-                continue
-            show_map[show_id] = {
+            if show_guid:
+                candidate_ids = []
+                if fallback_id and fallback_id in show_map and fallback_id != show_guid:
+                    candidate_ids.append(fallback_id)
+                if show_key and show_key in show_map and show_key not in candidate_ids and show_key != show_guid:
+                    candidate_ids.append(show_key)
+                for candidate_id in candidate_ids:
+                    existing_entry = show_map.pop(candidate_id)
+                    if show_guid not in show_map:
+                        show_map[show_guid] = existing_entry
+                    else:
+                        _merge_show_entry(show_map[show_guid], existing_entry)
+                show_id = show_guid
+            current_entry = {
                 'title': show_title,
                 'last_notified': last_notified,
                 'show_guid': show_guid,
                 'show_key': show_key,
                 'show_fallback_id': fallback_id,
             }
+            if show_id in show_map:
+                _merge_show_entry(show_map[show_id], current_entry)
+                continue
+            show_map[show_id] = current_entry
 
         # Fallback to log file if database is empty (backward compatibility)
         if not show_map:
