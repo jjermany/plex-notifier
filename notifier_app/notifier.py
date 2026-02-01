@@ -42,7 +42,7 @@ from plexapi.video import Episode
 from apscheduler.schedulers.base import BaseScheduler
 from itsdangerous import URLSafeTimedSerializer
 
-from .config import Settings, UserPreferences, Notification, EpisodeFirstSeen, db
+from .config import Settings, UserPreferences, Notification, EpisodeFirstSeen, ShowIdentity, db
 from sqlalchemy import or_
 
 # Logging
@@ -90,17 +90,59 @@ serializer = URLSafeTimedSerializer(secret_key)
 notification_cache = TTLCache(maxsize=1000, ttl=NOTIFICATION_CACHE_TTL_SECONDS)
 
 
-def _extract_show_guid(episode: Episode) -> Optional[str]:
+def _coerce_guid_values(value: Any) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        items = [value]
+    results: List[str] = []
+    for item in items:
+        if not item:
+            continue
+        if isinstance(item, dict):
+            candidate = item.get("id") or item.get("guid") or item.get("key")
+        else:
+            candidate = (
+                getattr(item, "id", None)
+                or getattr(item, "guid", None)
+                or getattr(item, "key", None)
+                or item
+            )
+        if candidate:
+            results.append(str(candidate))
+    return results
+
+
+def _dedupe_guid_list(values: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    output: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def _select_primary_guid(values: List[str]) -> Optional[str]:
+    if not values:
+        return None
+    for prefix in ("plex://",):
+        for value in values:
+            if value.startswith(prefix):
+                return value
+    return values[0]
+
+
+def _extract_show_guid(episode: Episode) -> List[str]:
     guid = getattr(episode, "grandparentGuid", None)
-    if isinstance(guid, (list, tuple)):
-        guid = guid[0] if guid else None
-    if guid:
-        return str(guid)
-    return None
+    return _dedupe_guid_list(_coerce_guid_values(guid))
 
 
 def _get_show_guid_for_episode(episode: Episode) -> Optional[str]:
-    return _extract_show_guid(episode)
+    return _select_primary_guid(_extract_show_guid(episode))
 
 
 def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMIT) -> Set[str]:
@@ -174,13 +216,113 @@ def _normalize_title_for_match(title: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", title.lower())
 
 
-def _extract_show_guid_from_metadata(item: Any) -> Optional[str]:
-    guid = getattr(item, "guid", None)
-    if isinstance(guid, (list, tuple)):
-        guid = guid[0] if guid else None
-    if guid:
-        return str(guid)
-    return None
+def _extract_show_guid_from_metadata(item: Any) -> List[str]:
+    guid_values = []
+    guid_values.extend(_coerce_guid_values(getattr(item, "guid", None)))
+    guid_values.extend(_coerce_guid_values(getattr(item, "guids", None)))
+    return _dedupe_guid_list(guid_values)
+
+
+def _extract_external_show_ids(guids: List[str]) -> Dict[str, Optional[str]]:
+    parsed = {
+        "tvdb_id": None,
+        "tmdb_id": None,
+        "imdb_id": None,
+        "plex_guid": None,
+    }
+    if not guids:
+        return parsed
+    for guid in guids:
+        if not guid:
+            continue
+        lower_guid = guid.lower()
+        if lower_guid.startswith("plex://") and not parsed["plex_guid"]:
+            parsed["plex_guid"] = guid
+        tvdb_match = re.search(r"(?:tvdb|thetvdb):///?(?P<id>\d+)", lower_guid)
+        if tvdb_match and not parsed["tvdb_id"]:
+            parsed["tvdb_id"] = tvdb_match.group("id")
+        tmdb_match = re.search(r"(?:tmdb|themoviedb):///?(?P<id>\d+)", lower_guid)
+        if tmdb_match and not parsed["tmdb_id"]:
+            parsed["tmdb_id"] = tmdb_match.group("id")
+        imdb_match = re.search(r"(?:imdb):///?(?P<id>tt\d+|\d+)", lower_guid)
+        if imdb_match and not parsed["imdb_id"]:
+            parsed["imdb_id"] = imdb_match.group("id")
+    return parsed
+
+
+def _build_show_fingerprint(title: Optional[str], year: Optional[int]) -> Optional[str]:
+    if not title:
+        return None
+    normalized = _normalize_title_for_match(title)
+    if year:
+        return f"{normalized}|{year}"
+    return normalized or None
+
+
+def _upsert_show_identity(
+    *,
+    show_guid: Optional[str],
+    show_key: Optional[str],
+    show_guids: List[str],
+    title: Optional[str],
+    year: Optional[int],
+    plex_rating_key: Optional[str],
+) -> bool:
+    if not any([show_guid, show_key, show_guids, plex_rating_key]):
+        return False
+
+    ids = _extract_external_show_ids(show_guids)
+    plex_guid = ids.get("plex_guid")
+    fingerprint = _build_show_fingerprint(title, year)
+
+    filters = []
+    if show_guid:
+        filters.append(ShowIdentity.show_guid == show_guid)
+    if show_key:
+        filters.append(ShowIdentity.show_key == show_key)
+    if plex_rating_key:
+        filters.append(ShowIdentity.plex_rating_key == plex_rating_key)
+    if plex_guid:
+        filters.append(ShowIdentity.plex_guid == plex_guid)
+    if ids.get("tvdb_id"):
+        filters.append(ShowIdentity.tvdb_id == ids["tvdb_id"])
+    if ids.get("tmdb_id"):
+        filters.append(ShowIdentity.tmdb_id == ids["tmdb_id"])
+    if ids.get("imdb_id"):
+        filters.append(ShowIdentity.imdb_id == ids["imdb_id"])
+
+    identity = None
+    if filters:
+        identity = ShowIdentity.query.filter(or_(*filters)).first()
+    if not identity:
+        identity = ShowIdentity(show_guid=show_guid, show_key=show_key)
+
+    changed = False
+
+    def _set_attr(attr: str, value: Optional[str | int]) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if getattr(identity, attr) != value:
+            setattr(identity, attr, value)
+            changed = True
+
+    _set_attr("show_guid", show_guid)
+    _set_attr("show_key", show_key)
+    _set_attr("tvdb_id", ids.get("tvdb_id"))
+    _set_attr("tmdb_id", ids.get("tmdb_id"))
+    _set_attr("imdb_id", ids.get("imdb_id"))
+    _set_attr("plex_guid", plex_guid)
+    _set_attr("plex_rating_key", plex_rating_key)
+    _set_attr("title", title)
+    if year is not None:
+        _set_attr("year", year)
+    _set_attr("fingerprint", fingerprint)
+
+    if changed or identity.id is None:
+        db.session.add(identity)
+        return True
+    return False
 
 
 def _fetch_show_by_key(
@@ -552,7 +694,9 @@ def reconcile_user_preferences(
                         if not matched_show:
                             matched_show = candidate_show
                         canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                        canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                        canonical_guid = _select_primary_guid(
+                            _extract_show_guid_from_metadata(candidate_show)
+                        )
                         changes = {}
                         if canonical_key and stored_key != canonical_key:
                             changes["show_key"] = (stored_key, canonical_key)
@@ -577,7 +721,9 @@ def reconcile_user_preferences(
                             if not matched_show:
                                 matched_show = candidate_show
                             canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                            canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                            canonical_guid = _select_primary_guid(
+                                _extract_show_guid_from_metadata(candidate_show)
+                            )
                             changes = {}
                             if canonical_guid and stored_guid != canonical_guid:
                                 changes["show_guid"] = (stored_guid, canonical_guid)
@@ -600,7 +746,9 @@ def reconcile_user_preferences(
                         if not matched_show:
                             matched_show = candidate_show
                         canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                        canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                        canonical_guid = _select_primary_guid(
+                            _extract_show_guid_from_metadata(candidate_show)
+                        )
                         changes = {}
                         if canonical_guid and stored_guid != canonical_guid:
                             changes["show_guid"] = (stored_guid, canonical_guid)
@@ -634,7 +782,20 @@ def reconcile_user_preferences(
                 continue
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-            new_show_guid = _extract_show_guid_from_metadata(matched_show)
+            show_guids = _extract_show_guid_from_metadata(matched_show)
+            new_show_guid = _select_primary_guid(show_guids)
+            matched_title = getattr(matched_show, "title", None) or title
+            matched_year = getattr(matched_show, "year", None) or year
+            identity_updated = _upsert_show_identity(
+                show_guid=new_show_guid,
+                show_key=new_show_key,
+                show_guids=show_guids,
+                title=matched_title,
+                year=matched_year,
+                plex_rating_key=new_show_key,
+            )
+            if identity_updated:
+                pending_updates += 1
 
             for pref, stored_guid in guid_only_prefs:
                 app.logger.info(
@@ -739,7 +900,18 @@ def reconcile_notifications(
                     )
                     continue
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-                new_show_guid = _extract_show_guid_from_metadata(matched_show)
+                show_guids = _extract_show_guid_from_metadata(matched_show)
+                new_show_guid = _select_primary_guid(show_guids)
+                identity_updated = _upsert_show_identity(
+                    show_guid=new_show_guid,
+                    show_key=new_show_key,
+                    show_guids=show_guids,
+                    title=getattr(matched_show, "title", None) or search_title,
+                    year=getattr(matched_show, "year", None) or year,
+                    plex_rating_key=new_show_key,
+                )
+                if identity_updated:
+                    pending_updates += 1
                 if not new_show_key and not new_show_guid:
                     missing_identifier_skipped += 1
                     app.logger.info(
@@ -782,7 +954,9 @@ def reconcile_notifications(
                 matched_show = _fetch_show_by_key(app, plex, tv_section, stored_key)
                 if matched_show:
                     canonical_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-                    canonical_guid = _extract_show_guid_from_metadata(matched_show)
+                    canonical_guid = _select_primary_guid(
+                        _extract_show_guid_from_metadata(matched_show)
+                    )
                     changes = {}
                     if canonical_key and stored_key != canonical_key:
                         changes["show_key"] = (stored_key, canonical_key)
@@ -804,7 +978,9 @@ def reconcile_notifications(
                 matched_show = _search_show_by_title(app, tv_section, search_title, search_year)
                 if matched_show:
                     canonical_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-                    canonical_guid = _extract_show_guid_from_metadata(matched_show)
+                    canonical_guid = _select_primary_guid(
+                        _extract_show_guid_from_metadata(matched_show)
+                    )
                     changes = {}
                     if canonical_guid and stored_guid != canonical_guid:
                         changes["show_guid"] = (stored_guid, canonical_guid)
@@ -833,7 +1009,18 @@ def reconcile_notifications(
                 continue
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-            new_show_guid = _extract_show_guid_from_metadata(matched_show)
+            show_guids = _extract_show_guid_from_metadata(matched_show)
+            new_show_guid = _select_primary_guid(show_guids)
+            identity_updated = _upsert_show_identity(
+                show_guid=new_show_guid,
+                show_key=new_show_key,
+                show_guids=show_guids,
+                title=getattr(matched_show, "title", None) or notif.show_title,
+                year=getattr(matched_show, "year", None),
+                plex_rating_key=new_show_key,
+            )
+            if identity_updated:
+                pending_updates += 1
 
             if new_show_key and notif.show_key != new_show_key:
                 notif.show_key = new_show_key
@@ -1058,21 +1245,24 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 show_key = ep.grandparentRatingKey
                 show_key_str = str(show_key) if show_key is not None else None
                 show_title = ep.grandparentTitle
-                raw_show_guid = _extract_show_guid(ep)
+                raw_show_guids = _extract_show_guid(ep)
+                guid_candidates = list(raw_show_guids)
 
-                if not show_key_str and not raw_show_guid:
+                if not show_key_str and not raw_show_guids:
                     continue
 
                 has_recent_notification_for_show = any(
                     candidate
-                    for candidate in (show_key_str, raw_show_guid)
+                    for candidate in ([show_key_str] + guid_candidates)
                     if candidate and candidate in (recent_show_keys | recent_show_guids)
                 )
                 show_guid = _get_show_guid_for_episode(ep)
+                if show_guid and show_guid not in guid_candidates:
+                    guid_candidates.append(show_guid)
 
                 # 🔒 Check per-show opt-out
                 show_pref = None
-                for guid_candidate in (raw_show_guid,):
+                for guid_candidate in guid_candidates:
                     if not guid_candidate:
                         continue
                     show_pref = UserPreferences.query.filter_by(email=canon, show_guid=guid_candidate).first()
@@ -1106,18 +1296,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             canon,
                             user_email,
                             show_key_str,
-                            raw_show_guid,
+                            guid_candidates,
                         )
                         if has_subscription:
                             current_app.logger.info(
                                 "Using subscription fallback for %s (%s) because Tautulli history was %s for %s.",
                                 show_title or "Unknown",
-                                show_key_str or raw_show_guid or "unknown",
+                                show_key_str or (guid_candidates[0] if guid_candidates else "unknown"),
                                 history_status,
                                 redacted_email,
                             )
                             has_watched_show = True
-                            show_guid_update = raw_show_guid or show_guid
+                            show_guid_update = guid_candidates[0] if guid_candidates else show_guid
                             if show_guid_update or show_key_str:
                                 for preference in fallback_preferences:
                                     if preference.show_opt_out:
@@ -1129,7 +1319,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                         preference.show_guid = show_guid_update
                                         needs_commit = True
                         else:
-                            item_id = show_key_str or raw_show_guid or "unknown"
+                            item_id = show_key_str or (guid_candidates[0] if guid_candidates else "unknown")
                             dedup_key = (canon, item_id)
                             if dedup_key not in processed_subscription_fallback_misses:
                                 subscription_fallback_miss_counts[show_title or item_id] += 1
@@ -1154,10 +1344,8 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 candidate_ids: List[str] = []
                 if ep.ratingKey:
                     candidate_ids.append(str(ep.ratingKey))
-                if raw_show_guid:
-                    candidate_ids.append(f"{raw_show_guid}|{season_episode}")
-                elif show_guid:
-                    candidate_ids.append(f"{show_guid}|{season_episode}")
+                for guid_candidate in guid_candidates:
+                    candidate_ids.append(f"{guid_candidate}|{season_episode}")
                 if show_key_str:
                     candidate_ids.append(f"{show_key_str}|{season_episode}")
                 if not candidate_ids:
@@ -1409,11 +1597,32 @@ def _save_notification_to_db(
     """Save notification to database for tracking and deduplication."""
     try:
         normalized_email = normalize_email(email)
+        show_key = str(episode.grandparentRatingKey) if episode.grandparentRatingKey is not None else None
+        show_guids = _extract_show_guid(episode)
+        if show_guid_override and show_guid_override not in show_guids:
+            show_guids.append(show_guid_override)
+        show_guid = show_guid_override or _select_primary_guid(show_guids)
+        show_title = episode.grandparentTitle
+        normalized_title, title_year = _extract_show_year_from_title(show_title)
+        identity_title = normalized_title or show_title
+        identity_year = (
+            getattr(episode, "grandparentYear", None)
+            or getattr(episode, "year", None)
+            or title_year
+        )
+        _upsert_show_identity(
+            show_guid=show_guid,
+            show_key=show_key,
+            show_guids=show_guids,
+            title=identity_title,
+            year=identity_year,
+            plex_rating_key=show_key,
+        )
         notification = Notification(
             email=normalized_email,
-            show_title=episode.grandparentTitle,
-            show_key=str(episode.grandparentRatingKey) if episode.grandparentRatingKey is not None else None,
-            show_guid=show_guid_override or _get_show_guid_for_episode(episode),
+            show_title=show_title,
+            show_key=show_key,
+            show_guid=show_guid,
             season=episode.parentIndex,
             episode=episode.index,
             episode_title=episode.title,
@@ -1556,9 +1765,10 @@ def _user_has_subscription_fallback(
     email: str,
     alternate_email: Optional[str],
     show_key: Optional[str],
-    show_guid: Optional[str],
+    show_guids: Optional[List[str]],
 ) -> Tuple[bool, List[UserPreferences]]:
-    candidates = [candidate for candidate in (show_guid, show_key) if candidate]
+    guid_candidates = [str(guid) for guid in (show_guids or []) if guid]
+    candidates = [candidate for candidate in ([show_key] + guid_candidates) if candidate]
 
     emails = [email]
     if alternate_email and alternate_email not in emails:
@@ -1595,9 +1805,11 @@ def _user_has_subscription_fallback(
             if show_key and notification.show_key and str(notification.show_key) == str(show_key):
                 notification_matches_identity = True
                 break
-            if show_guid and notification.show_guid and str(notification.show_guid) == str(show_guid):
-                notification_matches_identity = True
-                break
+            if guid_candidates and notification.show_guid:
+                stored_guid = str(notification.show_guid)
+                if stored_guid in guid_candidates:
+                    notification_matches_identity = True
+                    break
     except Exception as exc:
         current_app.logger.warning(
             "Unable to query notification history for fallback subscription check: %s",
@@ -1611,25 +1823,29 @@ def _user_has_subscription_fallback(
         ).all()
         opted_out = any(
             (show_key and preference.show_key and str(preference.show_key) == str(show_key))
-            or (show_guid and preference.show_guid and str(preference.show_guid) == str(show_guid))
+            or (
+                guid_candidates
+                and preference.show_guid
+                and str(preference.show_guid) in guid_candidates
+            )
             for preference in opt_out_preferences
         )
         if opted_out:
             current_app.logger.info(
                 "Notification history matched %s but user %s has opted out.",
-                show_key or show_guid or "unknown",
+                show_key or (guid_candidates[0] if guid_candidates else "unknown"),
                 emails,
             )
             return False, []
         synthetic_preference = UserPreferences(
             email=emails[0],
             show_key=show_key,
-            show_guid=show_guid,
+            show_guid=guid_candidates[0] if guid_candidates else None,
             show_opt_out=False,
         )
         current_app.logger.info(
             "Notification history subscription fallback match used for %s.",
-            show_key or show_guid or "unknown",
+            show_key or (guid_candidates[0] if guid_candidates else "unknown"),
         )
         return True, [synthetic_preference]
     return False, []

@@ -9,7 +9,7 @@ from flask import Flask, render_template, redirect, url_for, flash, request, ses
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from .config import db, Settings, UserPreferences, Notification
+from .config import db, Settings, UserPreferences, Notification, ShowIdentity
 from .utils import normalize_email
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
@@ -268,6 +268,47 @@ def create_app():
                 if 'show_guid' not in existing_cols:
                     conn.execute(text('ALTER TABLE user_preferences ADD COLUMN show_guid VARCHAR'))
                     app.logger.info("Added show_guid column to user_preferences table")
+        # Migrate show_identities table
+        if 'show_identities' not in inspector.get_table_names():
+            ShowIdentity.__table__.create(db.engine)
+            app.logger.info("Created show_identities table")
+            inspector = inspect(db.engine)
+        if 'show_identities' in inspector.get_table_names():
+            existing_cols = {c['name'] for c in inspector.get_columns('show_identities')}
+            columns_to_add = {
+                "show_guid": "VARCHAR",
+                "show_key": "VARCHAR",
+                "tvdb_id": "VARCHAR",
+                "tmdb_id": "VARCHAR",
+                "imdb_id": "VARCHAR",
+                "plex_guid": "VARCHAR",
+                "plex_rating_key": "VARCHAR",
+                "title": "VARCHAR",
+                "year": "INTEGER",
+                "fingerprint": "VARCHAR",
+            }
+            with db.engine.begin() as conn:
+                for column_name, column_type in columns_to_add.items():
+                    if column_name not in existing_cols:
+                        conn.execute(
+                            text(f'ALTER TABLE show_identities ADD COLUMN {column_name} {column_type}')
+                        )
+                        app.logger.info(
+                            "Added %s column to show_identities table",
+                            column_name,
+                        )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_show_identities_show_guid ON show_identities (show_guid)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_show_identities_show_key ON show_identities (show_key)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_show_identities_fingerprint ON show_identities (fingerprint)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_show_guid_key ON show_identities (show_guid, show_key)")
+                )
         # Backfill show_guid for existing preferences using known Plex identifiers
         try:
             show_guid_map = {

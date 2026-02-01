@@ -60,6 +60,26 @@ class Notification(db.Model):
     )
 
 
+class ShowIdentity(db.Model):
+    __tablename__ = 'show_identities'
+
+    id = db.Column(db.Integer, primary_key=True)
+    show_guid = db.Column(db.String, nullable=True, index=True)
+    show_key = db.Column(db.String, nullable=True, index=True)
+    tvdb_id = db.Column(db.String)
+    tmdb_id = db.Column(db.String)
+    imdb_id = db.Column(db.String)
+    plex_guid = db.Column(db.String)
+    plex_rating_key = db.Column(db.String)
+    title = db.Column(db.String)
+    year = db.Column(db.Integer)
+    fingerprint = db.Column(db.String, index=True)
+
+    __table_args__ = (
+        db.Index('idx_show_guid_key', 'show_guid', 'show_key'),
+    )
+
+
 class EpisodeFirstSeen(db.Model):
     __tablename__ = 'episode_first_seen'
 
