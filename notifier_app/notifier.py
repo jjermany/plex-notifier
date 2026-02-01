@@ -210,6 +210,33 @@ def _fetch_show_by_key(
             return None
 
 
+def _fetch_show_by_guid(
+    app: Flask,
+    plex: PlexServer,
+    tv_section: Any,
+    show_guid_value: str,
+) -> Any:
+    if not show_guid_value:
+        return None
+    guid_value = str(show_guid_value)
+    try:
+        return plex.fetchItem(guid_value)
+    except Exception:
+        pass
+    try:
+        search_results = tv_section.search(guid=guid_value, libtype="show")
+    except Exception as exc:
+        app.logger.warning(
+            "Reconciliation failed to search show metadata for guid '%s': %s",
+            guid_value,
+            exc,
+        )
+        return None
+    if not search_results:
+        return None
+    return search_results[0]
+
+
 def _search_show_by_title(
     app: Flask,
     tv_section: Any,
@@ -496,20 +523,24 @@ def reconcile_user_preferences(
         updated_count = 0
         scanned_count = 0
         pending_updates = 0
+        guid_only_corrected = 0
+        guid_only_unresolved = 0
         batch_size = 50
 
         for group in show_groups.values():
             title = group.get("title")
             year = group.get("year")
             show_key = group.get("show_key")
+            show_guid = group.get("show_guid")
 
-            if not show_key and not title:
+            if not show_key and not title and not show_guid:
                 continue
 
             scanned_count += 1
 
             matched_show = None
             needs_reconcile = False
+            guid_only_prefs: list[tuple[UserPreferences, str]] = []
             for pref in group["prefs"].values():
                 stored_key = str(pref.show_key) if pref.show_key else None
                 stored_guid = str(pref.show_guid) if pref.show_guid else None
@@ -539,6 +570,29 @@ def reconcile_user_preferences(
                     continue
 
                 if stored_guid:
+                    if not stored_key:
+                        guid_only_prefs.append((pref, stored_guid))
+                        candidate_show = _fetch_show_by_guid(app, plex, tv_section, stored_guid)
+                        if candidate_show:
+                            if not matched_show:
+                                matched_show = candidate_show
+                            canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
+                            canonical_guid = _extract_show_guid_from_metadata(candidate_show)
+                            changes = {}
+                            if canonical_guid and stored_guid != canonical_guid:
+                                changes["show_guid"] = (stored_guid, canonical_guid)
+                            if canonical_key and pref.show_key and str(pref.show_key) != canonical_key:
+                                changes["show_key"] = (str(pref.show_key), canonical_key)
+                            if changes:
+                                needs_reconcile = True
+                                _log_reconciliation_mismatch(
+                                    app,
+                                    record_type="Preference",
+                                    record_id=pref.id,
+                                    source="show_guid",
+                                    changes=changes,
+                                )
+                            continue
                     search_title = title
                     search_year = year
                     candidate_show = _search_show_by_title(app, tv_section, search_title, search_year)
@@ -570,10 +624,27 @@ def reconcile_user_preferences(
                     matched_show = _search_show_by_title(app, tv_section, title, year)
 
             if not matched_show:
+                for pref, stored_guid in guid_only_prefs:
+                    app.logger.info(
+                        "Preference reconciliation unable to resolve GUID-only preference %s (%s).",
+                        pref.id if pref.id is not None else "unknown",
+                        stored_guid,
+                    )
+                    guid_only_unresolved += 1
                 continue
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
             new_show_guid = _extract_show_guid_from_metadata(matched_show)
+
+            for pref, stored_guid in guid_only_prefs:
+                app.logger.info(
+                    "Preference reconciliation corrected GUID-only preference %s: %s -> %s (key %s).",
+                    pref.id if pref.id is not None else "unknown",
+                    stored_guid,
+                    new_show_guid or stored_guid,
+                    new_show_key or "None",
+                )
+                guid_only_corrected += 1
 
             for pref in group["prefs"].values():
                 if new_show_key and pref.show_key != new_show_key:
@@ -605,6 +676,12 @@ def reconcile_user_preferences(
             run_reason,
             updated_count,
             scanned_count,
+        )
+        app.logger.info(
+            "Preference reconciliation (%s) resolved %s GUID-only preferences; %s remain unresolved.",
+            run_reason,
+            guid_only_corrected,
+            guid_only_unresolved,
         )
 
 
