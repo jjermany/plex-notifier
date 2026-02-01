@@ -45,6 +45,10 @@ class Notification(db.Model):
     show_title = db.Column(db.String, nullable=False)
     show_key = db.Column(db.String, nullable=False, index=True)
     show_guid = db.Column(db.String, nullable=True, index=True)
+    tvdb_id = db.Column(db.String, nullable=True)
+    tmdb_id = db.Column(db.String, nullable=True)
+    imdb_id = db.Column(db.String, nullable=True)
+    plex_guid = db.Column(db.String, nullable=True)
     season = db.Column(db.Integer, nullable=False)
     episode = db.Column(db.Integer, nullable=False)
     episode_title = db.Column(db.String)
@@ -57,6 +61,9 @@ class Notification(db.Model):
         db.Index('idx_email_timestamp', 'email', 'timestamp'),
         db.Index('idx_show_key_season_episode', 'show_key', 'season', 'episode'),
         db.Index('idx_show_guid', 'show_guid'),
+        db.Index('idx_notification_tvdb_id', 'tvdb_id'),
+        db.Index('idx_notification_tmdb_id', 'tmdb_id'),
+        db.Index('idx_notification_imdb_id', 'imdb_id'),
     )
 
 

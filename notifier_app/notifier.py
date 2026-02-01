@@ -280,6 +280,42 @@ def _extract_show_counts(show: Any) -> tuple[Optional[int], Optional[int]]:
     )
 
 
+def _update_identity_from_show_metadata(
+    app: Flask,
+    show: Any,
+    *,
+    show_key_hint: Optional[str] = None,
+    show_guid_hint: Optional[str] = None,
+) -> None:
+    if not show:
+        return
+    try:
+        show_guids = _extract_show_guid_from_metadata(show)
+        if show_guid_hint and show_guid_hint not in show_guids:
+            show_guids.append(show_guid_hint)
+        show_key_value = (
+            str(getattr(show, "ratingKey", "") or "") or (str(show_key_hint) if show_key_hint else None)
+        )
+        show_guid_value = _select_primary_guid(show_guids) or show_guid_hint
+        leaf_count, child_count = _extract_show_counts(show)
+        _upsert_show_identity(
+            show_guid=show_guid_value,
+            show_key=show_key_value,
+            show_guids=show_guids,
+            title=getattr(show, "title", None),
+            year=getattr(show, "year", None),
+            plex_rating_key=show_key_value,
+            leaf_count=leaf_count,
+            child_count=child_count,
+        )
+    except Exception as exc:
+        app.logger.warning(
+            "Failed to update show identity from Plex metadata for %s: %s",
+            getattr(show, "ratingKey", None) or show_key_hint or show_guid_hint or "unknown",
+            exc,
+        )
+
+
 def _lookup_show_identity(
     *,
     show_guid: Optional[str],
@@ -466,7 +502,9 @@ def _fetch_show_by_key(
     if not show_key_value:
         return None
     try:
-        return tv_section.get(show_key_value)
+        show = tv_section.get(show_key_value)
+        _update_identity_from_show_metadata(app, show, show_key_hint=show_key_value)
+        return show
     except Exception:
         try:
             fetch_path = (
@@ -474,7 +512,9 @@ def _fetch_show_by_key(
                 if "/library/metadata/" in show_key_value
                 else f"/library/metadata/{show_key_value}"
             )
-            return plex.fetchItem(fetch_path)
+            show = plex.fetchItem(fetch_path)
+            _update_identity_from_show_metadata(app, show, show_key_hint=show_key_value)
+            return show
         except Exception as exc:
             app.logger.warning(
                 "Reconciliation failed to fetch show metadata for key '%s': %s",
@@ -494,7 +534,9 @@ def _fetch_show_by_guid(
         return None
     guid_value = str(show_guid_value)
     try:
-        return plex.fetchItem(guid_value)
+        show = plex.fetchItem(guid_value)
+        _update_identity_from_show_metadata(app, show, show_guid_hint=guid_value)
+        return show
     except Exception:
         pass
     try:
@@ -508,7 +550,9 @@ def _fetch_show_by_guid(
         return None
     if not search_results:
         return None
-    return search_results[0]
+    show = search_results[0]
+    _update_identity_from_show_metadata(app, show, show_guid_hint=guid_value)
+    return show
 
 
 def _search_show_by_title(
@@ -534,10 +578,14 @@ def _search_show_by_title(
     title_key = _normalize_title_for_match(search_title)
     for show in search_results:
         if search_year and getattr(show, "year", None) == search_year:
+            _update_identity_from_show_metadata(app, show)
             return show
         if _normalize_title_for_match(getattr(show, "title", "")) == title_key:
+            _update_identity_from_show_metadata(app, show)
             return show
-    return search_results[0]
+    show = search_results[0]
+    _update_identity_from_show_metadata(app, show)
+    return show
 
 
 def _log_reconciliation_mismatch(
@@ -1690,11 +1738,21 @@ def _save_notification_to_db(
             year=identity_year,
             plex_rating_key=show_key,
         )
+        external_ids = _extract_external_show_ids(show_guids)
+        identity = _lookup_show_identity(show_guid=show_guid, show_key=show_key)
+        if identity:
+            for key in ("tvdb_id", "tmdb_id", "imdb_id", "plex_guid"):
+                if not external_ids.get(key) and getattr(identity, key, None):
+                    external_ids[key] = getattr(identity, key)
         notification = Notification(
             email=normalized_email,
             show_title=show_title,
             show_key=show_key,
             show_guid=show_guid,
+            tvdb_id=external_ids.get("tvdb_id"),
+            tmdb_id=external_ids.get("tmdb_id"),
+            imdb_id=external_ids.get("imdb_id"),
+            plex_guid=external_ids.get("plex_guid"),
             season=episode.parentIndex,
             episode=episode.index,
             episode_title=episode.title,

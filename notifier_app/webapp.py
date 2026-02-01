@@ -263,6 +263,21 @@ def create_app():
                 if 'show_guid' not in existing_cols:
                     conn.execute(text('ALTER TABLE notifications ADD COLUMN show_guid VARCHAR'))
                     app.logger.info("Added show_guid column to notifications table")
+                notification_columns_to_add = {
+                    "tvdb_id": "VARCHAR",
+                    "tmdb_id": "VARCHAR",
+                    "imdb_id": "VARCHAR",
+                    "plex_guid": "VARCHAR",
+                }
+                for column_name, column_type in notification_columns_to_add.items():
+                    if column_name not in existing_cols:
+                        conn.execute(
+                            text(f'ALTER TABLE notifications ADD COLUMN {column_name} {column_type}')
+                        )
+                        app.logger.info(
+                            "Added %s column to notifications table",
+                            column_name,
+                        )
             if 'user_preferences' in inspector.get_table_names():
                 existing_cols = {c['name'] for c in inspector.get_columns('user_preferences')}
                 if 'show_guid' not in existing_cols:
