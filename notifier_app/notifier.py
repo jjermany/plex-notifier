@@ -723,15 +723,31 @@ def reconcile_notifications(
                 search_title = title or notif.show_title
                 if not search_title:
                     missing_identifier_skipped += 1
+                    app.logger.info(
+                        "Notification reconciliation skipped notification %s: missing show title for recovery.",
+                        notif.id if notif.id is not None else "unknown",
+                    )
                     continue
                 matched_show = _search_show_by_title(app, tv_section, search_title, year)
                 if not matched_show:
                     missing_identifier_skipped += 1
+                    app.logger.info(
+                        "Notification reconciliation skipped notification %s: no Plex match for title '%s'%s.",
+                        notif.id if notif.id is not None else "unknown",
+                        search_title,
+                        f" ({year})" if year else "",
+                    )
                     continue
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
                 new_show_guid = _extract_show_guid_from_metadata(matched_show)
                 if not new_show_key and not new_show_guid:
                     missing_identifier_skipped += 1
+                    app.logger.info(
+                        "Notification reconciliation skipped notification %s: Plex match for '%s'%s missing identifiers.",
+                        notif.id if notif.id is not None else "unknown",
+                        search_title,
+                        f" ({year})" if year else "",
+                    )
                     continue
                 if new_show_key and notif.show_key != new_show_key:
                     notif.show_key = new_show_key
@@ -740,6 +756,14 @@ def reconcile_notifications(
                 if db.session.is_modified(notif, include_collections=False):
                     updated_count += 1
                     missing_identifier_corrected += 1
+                    app.logger.info(
+                        "Notification reconciliation recovered identifiers for notification %s: title '%s'%s -> key %s, guid %s.",
+                        notif.id if notif.id is not None else "unknown",
+                        search_title,
+                        f" ({year})" if year else "",
+                        new_show_key or "None",
+                        new_show_guid or "None",
+                    )
                     pending_updates += 1
                     if pending_updates >= batch_size:
                         try:
