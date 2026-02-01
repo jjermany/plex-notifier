@@ -384,20 +384,19 @@ def _resolve_show_match(
     for key in ("tvdb_id", "tmdb_id", "imdb_id"):
         if identity and getattr(identity, key, None) and not external_ids.get(key):
             external_ids[key] = getattr(identity, key)
-    external_guid_candidates = []
+    external_guid_candidates: list[tuple[str, str]] = []
     if external_ids.get("tvdb_id"):
-        external_guid_candidates.append(f"tvdb://{external_ids['tvdb_id']}")
+        external_guid_candidates.append(("tvdb", f"tvdb://{external_ids['tvdb_id']}"))
     if external_ids.get("tmdb_id"):
-        external_guid_candidates.append(f"tmdb://{external_ids['tmdb_id']}")
+        external_guid_candidates.append(("tmdb", f"tmdb://{external_ids['tmdb_id']}"))
     if external_ids.get("imdb_id"):
-        external_guid_candidates.append(f"imdb://{external_ids['imdb_id']}")
-    for guid_value in external_guid_candidates:
+        external_guid_candidates.append(("imdb", f"imdb://{external_ids['imdb_id']}"))
+    failure_reason = "no_match_title_fallback"
+    for provider, guid_value in external_guid_candidates:
         matched_show = _fetch_show_by_guid(app, plex, tv_section, guid_value)
         if matched_show:
-            return matched_show, "external_ids"
-    failure_reason = "title fallback disabled/failed"
-    if external_guid_candidates:
-        failure_reason = "no Plex match for external IDs"
+            return matched_show, f"external_id_match:{provider}"
+        failure_reason = "no_match_external_ids"
 
     plex_guid = None
     if show_guid and show_guid.startswith("plex://"):
@@ -407,8 +406,8 @@ def _resolve_show_match(
     if plex_guid:
         matched_show = _fetch_show_by_guid(app, plex, tv_section, plex_guid)
         if matched_show:
-            return matched_show, "plex_guid"
-        failure_reason = "no Plex match for Plex GUID"
+            return matched_show, "plex_guid_match"
+        failure_reason = "no_match_plex_guid"
 
     fingerprint = identity.fingerprint if identity and identity.fingerprint else None
     base_fingerprint = None if fingerprint else _build_show_fingerprint(title, year)
@@ -424,14 +423,14 @@ def _resolve_show_match(
         if identity_key:
             matched_show = _fetch_show_by_key(app, plex, tv_section, identity_key)
             if matched_show:
-                return matched_show, "fingerprint"
+                return matched_show, "fingerprint_match"
         identity_guid = identity_match.plex_guid or identity_match.show_guid
         if identity_guid:
             matched_show = _fetch_show_by_guid(app, plex, tv_section, identity_guid)
             if matched_show:
-                return matched_show, "fingerprint"
+                return matched_show, "fingerprint_match"
     if fingerprint or base_fingerprint:
-        failure_reason = "no fingerprint match"
+        failure_reason = "no_match_fingerprint"
 
     if force_title_fallback and title:
         matched_show = _search_show_by_title(app, tv_section, title, year)
@@ -443,8 +442,8 @@ def _resolve_show_match(
                 title,
                 f" ({year})" if year else "",
             )
-            return matched_show, "title_fallback"
-        failure_reason = "title fallback disabled/failed"
+            return matched_show, "title_fallback_match"
+        failure_reason = "no_match_title_fallback"
 
     return None, failure_reason
 
@@ -1062,7 +1061,7 @@ def reconcile_notifications(
                         notif.id if notif.id is not None else "unknown",
                     )
                     continue
-                matched_show, _ = _resolve_show_match(
+                matched_show, match_reason = _resolve_show_match(
                     app,
                     plex,
                     tv_section,
@@ -1077,10 +1076,11 @@ def reconcile_notifications(
                 if not matched_show:
                     missing_identifier_skipped += 1
                     app.logger.info(
-                        "Notification reconciliation skipped notification %s: no identity match for '%s'%s.",
+                        "Notification reconciliation skipped notification %s: no identity match for '%s'%s (reason=%s).",
                         notif.id if notif.id is not None else "unknown",
                         search_title,
                         f" ({year})" if year else "",
+                        match_reason,
                     )
                     continue
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
@@ -1116,12 +1116,14 @@ def reconcile_notifications(
                     updated_count += 1
                     missing_identifier_corrected += 1
                     app.logger.info(
-                        "Notification reconciliation recovered identifiers for notification %s: title '%s'%s -> key %s, guid %s.",
+                        "Notification reconciliation recovered identifiers for notification %s: "
+                        "title '%s'%s -> key %s, guid %s (reason=%s).",
                         notif.id if notif.id is not None else "unknown",
                         search_title,
                         f" ({year})" if year else "",
                         new_show_key or "None",
                         new_show_guid or "None",
+                        match_reason,
                     )
                     pending_updates += 1
                     if pending_updates >= batch_size:
