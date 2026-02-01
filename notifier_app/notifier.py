@@ -250,13 +250,143 @@ def _extract_external_show_ids(guids: List[str]) -> Dict[str, Optional[str]]:
     return parsed
 
 
-def _build_show_fingerprint(title: Optional[str], year: Optional[int]) -> Optional[str]:
+def _build_show_fingerprint(
+    title: Optional[str],
+    year: Optional[int],
+    leaf_count: Optional[int] = None,
+    child_count: Optional[int] = None,
+) -> Optional[str]:
     if not title:
         return None
     normalized = _normalize_title_for_match(title)
+    if not normalized:
+        return None
+    parts = [normalized]
     if year:
-        return f"{normalized}|{year}"
-    return normalized or None
+        parts.append(str(year))
+    if leaf_count is not None:
+        parts.append(f"leaf:{leaf_count}")
+    if child_count is not None:
+        parts.append(f"child:{child_count}")
+    return "|".join(parts) if parts else None
+
+
+def _extract_show_counts(show: Any) -> tuple[Optional[int], Optional[int]]:
+    if not show:
+        return None, None
+    return (
+        getattr(show, "leafCount", None),
+        getattr(show, "childCount", None),
+    )
+
+
+def _lookup_show_identity(
+    *,
+    show_guid: Optional[str],
+    show_key: Optional[str],
+) -> Optional[ShowIdentity]:
+    filters = []
+    if show_guid:
+        filters.append(ShowIdentity.show_guid == show_guid)
+    if show_key:
+        filters.append(ShowIdentity.show_key == show_key)
+        filters.append(ShowIdentity.plex_rating_key == show_key)
+    if not filters:
+        return None
+    return ShowIdentity.query.filter(or_(*filters)).first()
+
+
+def _find_identity_by_fingerprint(
+    app: Flask,
+    *,
+    fingerprint: Optional[str],
+    base_fingerprint: Optional[str],
+    record_type: str,
+    record_id: Optional[int],
+) -> Optional[ShowIdentity]:
+    if not fingerprint and not base_fingerprint:
+        return None
+    if fingerprint:
+        matches = ShowIdentity.query.filter(ShowIdentity.fingerprint == fingerprint).all()
+    else:
+        like_pattern = f"{base_fingerprint}|%" if base_fingerprint else None
+        matches = ShowIdentity.query.filter(
+            or_(
+                ShowIdentity.fingerprint == base_fingerprint,
+                ShowIdentity.fingerprint.like(like_pattern),
+            )
+        ).all()
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        app.logger.info(
+            "%s reconciliation skipped %s: fingerprint match '%s' returned %s identities.",
+            record_type,
+            record_id if record_id is not None else "unknown",
+            fingerprint or base_fingerprint,
+            len(matches),
+        )
+    return None
+
+
+def _resolve_show_match(
+    app: Flask,
+    plex: PlexServer,
+    tv_section: Any,
+    *,
+    show_guid: Optional[str],
+    show_key: Optional[str],
+    title: Optional[str],
+    year: Optional[int],
+    record_type: str,
+    record_id: Optional[int],
+) -> Any:
+    identity = _lookup_show_identity(show_guid=show_guid, show_key=show_key)
+    stored_guids = [show_guid] if show_guid else []
+    external_ids = _extract_external_show_ids(stored_guids)
+    for key in ("tvdb_id", "tmdb_id", "imdb_id"):
+        if identity and getattr(identity, key, None) and not external_ids.get(key):
+            external_ids[key] = getattr(identity, key)
+    external_guid_candidates = []
+    if external_ids.get("tvdb_id"):
+        external_guid_candidates.append(f"tvdb://{external_ids['tvdb_id']}")
+    if external_ids.get("tmdb_id"):
+        external_guid_candidates.append(f"tmdb://{external_ids['tmdb_id']}")
+    if external_ids.get("imdb_id"):
+        external_guid_candidates.append(f"imdb://{external_ids['imdb_id']}")
+    for guid_value in external_guid_candidates:
+        matched_show = _fetch_show_by_guid(app, plex, tv_section, guid_value)
+        if matched_show:
+            return matched_show
+
+    plex_guid = None
+    if show_guid and show_guid.startswith("plex://"):
+        plex_guid = show_guid
+    elif identity and identity.plex_guid:
+        plex_guid = identity.plex_guid
+    if plex_guid:
+        matched_show = _fetch_show_by_guid(app, plex, tv_section, plex_guid)
+        if matched_show:
+            return matched_show
+
+    fingerprint = identity.fingerprint if identity and identity.fingerprint else None
+    base_fingerprint = None if fingerprint else _build_show_fingerprint(title, year)
+    identity_match = _find_identity_by_fingerprint(
+        app,
+        fingerprint=fingerprint,
+        base_fingerprint=base_fingerprint,
+        record_type=record_type,
+        record_id=record_id,
+    )
+    if identity_match:
+        identity_key = identity_match.plex_rating_key or identity_match.show_key
+        if identity_key:
+            return _fetch_show_by_key(app, plex, tv_section, identity_key)
+        identity_guid = identity_match.plex_guid or identity_match.show_guid
+        if identity_guid:
+            return _fetch_show_by_guid(app, plex, tv_section, identity_guid)
+
+    return None
 
 
 def _upsert_show_identity(
@@ -267,13 +397,15 @@ def _upsert_show_identity(
     title: Optional[str],
     year: Optional[int],
     plex_rating_key: Optional[str],
+    leaf_count: Optional[int] = None,
+    child_count: Optional[int] = None,
 ) -> bool:
     if not any([show_guid, show_key, show_guids, plex_rating_key]):
         return False
 
     ids = _extract_external_show_ids(show_guids)
     plex_guid = ids.get("plex_guid")
-    fingerprint = _build_show_fingerprint(title, year)
+    fingerprint = _build_show_fingerprint(title, year, leaf_count, child_count)
 
     filters = []
     if show_guid:
@@ -681,95 +813,26 @@ def reconcile_user_preferences(
             scanned_count += 1
 
             matched_show = None
-            needs_reconcile = False
             guid_only_prefs: list[tuple[UserPreferences, str]] = []
             for pref in group["prefs"].values():
                 stored_key = str(pref.show_key) if pref.show_key else None
                 stored_guid = str(pref.show_guid) if pref.show_guid else None
                 if stored_guid and stored_guid.startswith("title:"):
                     stored_guid = None
-                if stored_key:
-                    candidate_show = _fetch_show_by_key(app, plex, tv_section, stored_key)
-                    if candidate_show:
-                        if not matched_show:
-                            matched_show = candidate_show
-                        canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                        canonical_guid = _select_primary_guid(
-                            _extract_show_guid_from_metadata(candidate_show)
-                        )
-                        changes = {}
-                        if canonical_key and stored_key != canonical_key:
-                            changes["show_key"] = (stored_key, canonical_key)
-                        if canonical_guid and stored_guid and stored_guid != canonical_guid:
-                            changes["show_guid"] = (stored_guid, canonical_guid)
-                        if changes:
-                            needs_reconcile = True
-                            _log_reconciliation_mismatch(
-                                app,
-                                record_type="Preference",
-                                record_id=pref.id,
-                                source="show_key",
-                                changes=changes,
-                            )
-                    continue
+                if stored_guid and not stored_key:
+                    guid_only_prefs.append((pref, stored_guid))
 
-                if stored_guid:
-                    if not stored_key:
-                        guid_only_prefs.append((pref, stored_guid))
-                        candidate_show = _fetch_show_by_guid(app, plex, tv_section, stored_guid)
-                        if candidate_show:
-                            if not matched_show:
-                                matched_show = candidate_show
-                            canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                            canonical_guid = _select_primary_guid(
-                                _extract_show_guid_from_metadata(candidate_show)
-                            )
-                            changes = {}
-                            if canonical_guid and stored_guid != canonical_guid:
-                                changes["show_guid"] = (stored_guid, canonical_guid)
-                            if canonical_key and pref.show_key and str(pref.show_key) != canonical_key:
-                                changes["show_key"] = (str(pref.show_key), canonical_key)
-                            if changes:
-                                needs_reconcile = True
-                                _log_reconciliation_mismatch(
-                                    app,
-                                    record_type="Preference",
-                                    record_id=pref.id,
-                                    source="show_guid",
-                                    changes=changes,
-                                )
-                            continue
-                    search_title = title
-                    search_year = year
-                    candidate_show = _search_show_by_title(app, tv_section, search_title, search_year)
-                    if candidate_show:
-                        if not matched_show:
-                            matched_show = candidate_show
-                        canonical_key = str(getattr(candidate_show, "ratingKey", "") or "") or None
-                        canonical_guid = _select_primary_guid(
-                            _extract_show_guid_from_metadata(candidate_show)
-                        )
-                        changes = {}
-                        if canonical_guid and stored_guid != canonical_guid:
-                            changes["show_guid"] = (stored_guid, canonical_guid)
-                        if canonical_key and pref.show_key and str(pref.show_key) != canonical_key:
-                            changes["show_key"] = (str(pref.show_key), canonical_key)
-                        if changes:
-                            needs_reconcile = True
-                            _log_reconciliation_mismatch(
-                                app,
-                                record_type="Preference",
-                                record_id=pref.id,
-                                source="show_guid",
-                                changes=changes,
-                            )
-
-            if not needs_reconcile:
-                if show_key:
-                    matched_show = matched_show or _fetch_show_by_key(app, plex, tv_section, show_key)
-
-                if not matched_show and title:
-                    matched_show = _search_show_by_title(app, tv_section, title, year)
+            matched_show = _resolve_show_match(
+                app,
+                plex,
+                tv_section,
+                show_guid=show_guid,
+                show_key=show_key,
+                title=title,
+                year=year,
+                record_type="Preference",
+                record_id=None,
+            )
 
             if not matched_show:
                 for pref, stored_guid in guid_only_prefs:
@@ -786,6 +849,7 @@ def reconcile_user_preferences(
             new_show_guid = _select_primary_guid(show_guids)
             matched_title = getattr(matched_show, "title", None) or title
             matched_year = getattr(matched_show, "year", None) or year
+            leaf_count, child_count = _extract_show_counts(matched_show)
             identity_updated = _upsert_show_identity(
                 show_guid=new_show_guid,
                 show_key=new_show_key,
@@ -793,6 +857,8 @@ def reconcile_user_preferences(
                 title=matched_title,
                 year=matched_year,
                 plex_rating_key=new_show_key,
+                leaf_count=leaf_count,
+                child_count=child_count,
             )
             if identity_updated:
                 pending_updates += 1
@@ -808,6 +874,24 @@ def reconcile_user_preferences(
                 guid_only_corrected += 1
 
             for pref in group["prefs"].values():
+                stored_key = str(pref.show_key) if pref.show_key else None
+                stored_guid = str(pref.show_guid) if pref.show_guid else None
+                if stored_guid and stored_guid.startswith("title:"):
+                    stored_guid = None
+                changes = {}
+                if new_show_key and stored_key and stored_key != new_show_key:
+                    changes["show_key"] = (stored_key, new_show_key)
+                if new_show_guid and stored_guid and stored_guid != new_show_guid:
+                    changes["show_guid"] = (stored_guid, new_show_guid)
+                if changes:
+                    source = "show_key" if stored_key else "show_guid"
+                    _log_reconciliation_mismatch(
+                        app,
+                        record_type="Preference",
+                        record_id=pref.id,
+                        source=source,
+                        changes=changes,
+                    )
                 if new_show_key and pref.show_key != new_show_key:
                     pref.show_key = new_show_key
                 if new_show_guid and pref.show_guid != new_show_guid:
@@ -889,11 +973,21 @@ def reconcile_notifications(
                         notif.id if notif.id is not None else "unknown",
                     )
                     continue
-                matched_show = _search_show_by_title(app, tv_section, search_title, year)
+                matched_show = _resolve_show_match(
+                    app,
+                    plex,
+                    tv_section,
+                    show_guid=None,
+                    show_key=None,
+                    title=search_title,
+                    year=year,
+                    record_type="Notification",
+                    record_id=notif.id,
+                )
                 if not matched_show:
                     missing_identifier_skipped += 1
                     app.logger.info(
-                        "Notification reconciliation skipped notification %s: no Plex match for title '%s'%s.",
+                        "Notification reconciliation skipped notification %s: no identity match for '%s'%s.",
                         notif.id if notif.id is not None else "unknown",
                         search_title,
                         f" ({year})" if year else "",
@@ -902,6 +996,7 @@ def reconcile_notifications(
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
                 show_guids = _extract_show_guid_from_metadata(matched_show)
                 new_show_guid = _select_primary_guid(show_guids)
+                leaf_count, child_count = _extract_show_counts(matched_show)
                 identity_updated = _upsert_show_identity(
                     show_guid=new_show_guid,
                     show_key=new_show_key,
@@ -909,6 +1004,8 @@ def reconcile_notifications(
                     title=getattr(matched_show, "title", None) or search_title,
                     year=getattr(matched_show, "year", None) or year,
                     plex_rating_key=new_show_key,
+                    leaf_count=leaf_count,
+                    child_count=child_count,
                 )
                 if identity_updated:
                     pending_updates += 1
@@ -948,62 +1045,18 @@ def reconcile_notifications(
                 continue
 
             scanned_count += 1
-            matched_show = None
-
-            if stored_key:
-                matched_show = _fetch_show_by_key(app, plex, tv_section, stored_key)
-                if matched_show:
-                    canonical_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-                    canonical_guid = _select_primary_guid(
-                        _extract_show_guid_from_metadata(matched_show)
-                    )
-                    changes = {}
-                    if canonical_key and stored_key != canonical_key:
-                        changes["show_key"] = (stored_key, canonical_key)
-                    if canonical_guid and stored_guid and stored_guid != canonical_guid:
-                        changes["show_guid"] = (stored_guid, canonical_guid)
-                    if changes:
-                        mismatch_count += 1
-                        _log_reconciliation_mismatch(
-                            app,
-                            record_type="Notification",
-                            record_id=notif.id,
-                            source="show_key",
-                            changes=changes,
-                        )
-            elif stored_guid:
-                title, year = _extract_show_year_from_title(notif.show_title)
-                search_title = title or notif.show_title
-                search_year = year
-                matched_show = _search_show_by_title(app, tv_section, search_title, search_year)
-                if matched_show:
-                    canonical_key = str(getattr(matched_show, "ratingKey", "") or "") or None
-                    canonical_guid = _select_primary_guid(
-                        _extract_show_guid_from_metadata(matched_show)
-                    )
-                    changes = {}
-                    if canonical_guid and stored_guid != canonical_guid:
-                        changes["show_guid"] = (stored_guid, canonical_guid)
-                    if canonical_key and stored_key and stored_key != canonical_key:
-                        changes["show_key"] = (stored_key, canonical_key)
-                    if changes:
-                        mismatch_count += 1
-                        _log_reconciliation_mismatch(
-                            app,
-                            record_type="Notification",
-                            record_id=notif.id,
-                            source="show_guid",
-                            changes=changes,
-                        )
-
-            if not matched_show and stored_key:
-                title, year = _extract_show_year_from_title(notif.show_title)
-                matched_show = _search_show_by_title(
-                    app,
-                    tv_section,
-                    title or notif.show_title,
-                    year,
-                )
+            title, year = _extract_show_year_from_title(notif.show_title)
+            matched_show = _resolve_show_match(
+                app,
+                plex,
+                tv_section,
+                show_guid=stored_guid,
+                show_key=stored_key,
+                title=title or notif.show_title,
+                year=year,
+                record_type="Notification",
+                record_id=notif.id,
+            )
 
             if not matched_show:
                 continue
@@ -1011,6 +1064,7 @@ def reconcile_notifications(
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
             show_guids = _extract_show_guid_from_metadata(matched_show)
             new_show_guid = _select_primary_guid(show_guids)
+            leaf_count, child_count = _extract_show_counts(matched_show)
             identity_updated = _upsert_show_identity(
                 show_guid=new_show_guid,
                 show_key=new_show_key,
@@ -1018,9 +1072,27 @@ def reconcile_notifications(
                 title=getattr(matched_show, "title", None) or notif.show_title,
                 year=getattr(matched_show, "year", None),
                 plex_rating_key=new_show_key,
+                leaf_count=leaf_count,
+                child_count=child_count,
             )
             if identity_updated:
                 pending_updates += 1
+
+            changes = {}
+            if new_show_key and stored_key and stored_key != new_show_key:
+                changes["show_key"] = (stored_key, new_show_key)
+            if new_show_guid and stored_guid and stored_guid != new_show_guid:
+                changes["show_guid"] = (stored_guid, new_show_guid)
+            if changes:
+                mismatch_count += 1
+                source = "show_key" if stored_key else "show_guid"
+                _log_reconciliation_mismatch(
+                    app,
+                    record_type="Notification",
+                    record_id=notif.id,
+                    source=source,
+                    changes=changes,
+                )
 
             if new_show_key and notif.show_key != new_show_key:
                 notif.show_key = new_show_key
