@@ -290,9 +290,51 @@ def reconcile_user_preferences(
             .distinct()
             .all()
         )
+        empty_opt_out_preferences = UserPreferences.query.filter(
+            UserPreferences.show_key.is_(None),
+            UserPreferences.show_guid.is_(None),
+            UserPreferences.global_opt_out.is_(False),
+            UserPreferences.show_opt_out.is_(True),
+        ).all()
         preferences = UserPreferences.query.filter(
             or_(UserPreferences.show_key.isnot(None), UserPreferences.show_guid.isnot(None))
         ).all()
+        notification_entries_by_email: dict[str, list[dict[str, Any]]] = {}
+        if empty_opt_out_preferences:
+            notification_identity_rows = (
+                db.session.query(
+                    Notification.email,
+                    Notification.show_key,
+                    Notification.show_guid,
+                    Notification.show_title,
+                )
+                .distinct()
+                .all()
+            )
+            seen_identity_keys: dict[str, set[tuple[Optional[str], Optional[str], Optional[str]]]] = {}
+            for email, show_key, show_guid, show_title in notification_identity_rows:
+                normalized_email = normalize_email(email)
+                title, year = _extract_show_year_from_title(show_title)
+                title_identity = normalize_show_identity(title or show_title, year) if show_title else None
+                identity_key = (
+                    str(show_guid) if show_guid else None,
+                    str(show_key) if show_key else None,
+                    title_identity,
+                )
+                if normalized_email not in seen_identity_keys:
+                    seen_identity_keys[normalized_email] = set()
+                if identity_key in seen_identity_keys[normalized_email]:
+                    continue
+                seen_identity_keys[normalized_email].add(identity_key)
+                notification_entries_by_email.setdefault(normalized_email, []).append(
+                    {
+                        "show_guid": str(show_guid) if show_guid else None,
+                        "show_key": str(show_key) if show_key else None,
+                        "title": title or show_title,
+                        "year": year,
+                        "title_identity": title_identity,
+                    }
+                )
 
         show_groups: dict[str, dict[str, Any]] = {}
         guid_index: dict[str, str] = {}
@@ -476,6 +518,69 @@ def reconcile_user_preferences(
             )
             if pref.id is not None:
                 group["prefs"].setdefault(pref.id, pref)
+
+        if empty_opt_out_preferences and notification_entries_by_email:
+            prefs_by_email: dict[str, list[UserPreferences]] = {}
+            for pref in empty_opt_out_preferences:
+                normalized_email = normalize_email(pref.email)
+                prefs_by_email.setdefault(normalized_email, []).append(pref)
+
+            existing_identities: dict[str, set[str]] = {}
+            for pref in preferences:
+                normalized_email = normalize_email(pref.email)
+                identity_set = existing_identities.setdefault(normalized_email, set())
+                for value in (pref.show_key, pref.show_guid):
+                    if value:
+                        identity_set.add(str(value))
+                        normalized_identity = _normalize_stored_identity(value)
+                        if normalized_identity:
+                            identity_set.add(normalized_identity)
+
+            for email, empty_prefs in prefs_by_email.items():
+                notification_entries = notification_entries_by_email.get(email, [])
+                if not notification_entries:
+                    continue
+                known_identities = existing_identities.get(email, set())
+                unmatched_entries = [
+                    entry
+                    for entry in notification_entries
+                    if not any(
+                        identifier and identifier in known_identities
+                        for identifier in (
+                            entry.get("show_guid"),
+                            entry.get("show_key"),
+                            entry.get("title_identity"),
+                        )
+                    )
+                ]
+                if not unmatched_entries:
+                    continue
+                if len(unmatched_entries) != len(empty_prefs):
+                    app.logger.info(
+                        "Preference reconciliation skipped %s empty opt-out rows for %s due to %s unmatched shows.",
+                        len(empty_prefs),
+                        email,
+                        len(unmatched_entries),
+                    )
+                    continue
+                sorted_entries = sorted(
+                    unmatched_entries,
+                    key=lambda entry: (
+                        _normalize_title_for_match(entry.get("title")),
+                        entry.get("title_identity") or "",
+                    ),
+                )
+                sorted_prefs = sorted(empty_prefs, key=lambda pref: pref.id or 0)
+                for pref, entry in zip(sorted_prefs, sorted_entries):
+                    group = _ensure_group(
+                        show_guid=entry.get("show_guid"),
+                        show_key=entry.get("show_key"),
+                        title=entry.get("title"),
+                        year=entry.get("year"),
+                        title_identity=entry.get("title_identity"),
+                    )
+                    if pref.id is not None:
+                        group["prefs"].setdefault(pref.id, pref)
 
         updated_count = 0
         scanned_count = 0
