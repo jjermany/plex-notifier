@@ -377,7 +377,7 @@ def _resolve_show_match(
     record_type: str,
     record_id: Optional[int],
     force_title_fallback: bool = False,
-) -> Any:
+) -> Tuple[Any | None, str]:
     identity = _lookup_show_identity(show_guid=show_guid, show_key=show_key)
     stored_guids = [show_guid] if show_guid else []
     external_ids = _extract_external_show_ids(stored_guids)
@@ -394,7 +394,10 @@ def _resolve_show_match(
     for guid_value in external_guid_candidates:
         matched_show = _fetch_show_by_guid(app, plex, tv_section, guid_value)
         if matched_show:
-            return matched_show
+            return matched_show, "external_ids"
+    failure_reason = "title fallback disabled/failed"
+    if external_guid_candidates:
+        failure_reason = "no Plex match for external IDs"
 
     plex_guid = None
     if show_guid and show_guid.startswith("plex://"):
@@ -404,7 +407,8 @@ def _resolve_show_match(
     if plex_guid:
         matched_show = _fetch_show_by_guid(app, plex, tv_section, plex_guid)
         if matched_show:
-            return matched_show
+            return matched_show, "plex_guid"
+        failure_reason = "no Plex match for Plex GUID"
 
     fingerprint = identity.fingerprint if identity and identity.fingerprint else None
     base_fingerprint = None if fingerprint else _build_show_fingerprint(title, year)
@@ -418,10 +422,16 @@ def _resolve_show_match(
     if identity_match:
         identity_key = identity_match.plex_rating_key or identity_match.show_key
         if identity_key:
-            return _fetch_show_by_key(app, plex, tv_section, identity_key)
+            matched_show = _fetch_show_by_key(app, plex, tv_section, identity_key)
+            if matched_show:
+                return matched_show, "fingerprint"
         identity_guid = identity_match.plex_guid or identity_match.show_guid
         if identity_guid:
-            return _fetch_show_by_guid(app, plex, tv_section, identity_guid)
+            matched_show = _fetch_show_by_guid(app, plex, tv_section, identity_guid)
+            if matched_show:
+                return matched_show, "fingerprint"
+    if fingerprint or base_fingerprint:
+        failure_reason = "no fingerprint match"
 
     if force_title_fallback and title:
         matched_show = _search_show_by_title(app, tv_section, title, year)
@@ -433,9 +443,10 @@ def _resolve_show_match(
                 title,
                 f" ({year})" if year else "",
             )
-            return matched_show
+            return matched_show, "title_fallback"
+        failure_reason = "title fallback disabled/failed"
 
-    return None
+    return None, failure_reason
 
 
 def _upsert_show_identity(
@@ -883,7 +894,7 @@ def reconcile_user_preferences(
                 if stored_guid and not stored_key:
                     guid_only_prefs.append((pref, stored_guid))
 
-            matched_show = _resolve_show_match(
+            matched_show, match_detail = _resolve_show_match(
                 app,
                 plex,
                 tv_section,
@@ -897,6 +908,14 @@ def reconcile_user_preferences(
             )
 
             if not matched_show:
+                app.logger.info(
+                    "Preference reconciliation match summary: show_key=%s, show_guid=%s, title=%s, year=%s, matched=no, detail=%s.",
+                    show_key or "None",
+                    show_guid or "None",
+                    title or "None",
+                    year if year is not None else "None",
+                    match_detail,
+                )
                 for pref, stored_guid in guid_only_prefs:
                     app.logger.info(
                         "Preference reconciliation unable to resolve GUID-only preference %s (%s).",
@@ -905,6 +924,14 @@ def reconcile_user_preferences(
                     )
                     guid_only_unresolved += 1
                 continue
+            app.logger.info(
+                "Preference reconciliation match summary: show_key=%s, show_guid=%s, title=%s, year=%s, matched=yes, detail=%s.",
+                show_key or "None",
+                show_guid or "None",
+                title or "None",
+                year if year is not None else "None",
+                match_detail,
+            )
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
             show_guids = _extract_show_guid_from_metadata(matched_show)
@@ -1035,7 +1062,7 @@ def reconcile_notifications(
                         notif.id if notif.id is not None else "unknown",
                     )
                     continue
-                matched_show = _resolve_show_match(
+                matched_show, _ = _resolve_show_match(
                     app,
                     plex,
                     tv_section,
@@ -1109,7 +1136,7 @@ def reconcile_notifications(
 
             scanned_count += 1
             title, year = _extract_show_year_from_title(notif.show_title)
-            matched_show = _resolve_show_match(
+            matched_show, _ = _resolve_show_match(
                 app,
                 plex,
                 tv_section,
