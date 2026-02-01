@@ -1,7 +1,6 @@
 import os
 import re
 import logging
-import threading
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -308,33 +307,15 @@ def create_app():
             db.session.commit()
             app.logger.info("Created default settings")
 
+        reconcile_user_preferences(
+            app,
+            run_reason="startup",
+            cutoff_days=INACTIVE_SHOW_THRESHOLD_DAYS,
+        )
+
         interval = s.notify_interval or 30
         sched = start_scheduler(app, interval)
         app.config['scheduler'] = sched
-        try:
-            sched.add_job(
-                func=lambda: reconcile_user_preferences(
-                    app,
-                    run_reason="scheduled",
-                    cutoff_days=INACTIVE_SHOW_THRESHOLD_DAYS,
-                ),
-                trigger='interval',
-                hours=24,
-                id='reconcile_preferences',
-                replace_existing=True,
-            )
-            app.logger.info("Scheduled preference reconciliation job to run daily.")
-        except Exception as exc:
-            app.logger.warning(f"Failed to schedule preference reconciliation job: {exc}")
-
-        threading.Thread(
-            target=lambda: reconcile_user_preferences(
-                app,
-                run_reason="startup",
-                cutoff_days=INACTIVE_SHOW_THRESHOLD_DAYS,
-            ),
-            daemon=True,
-        ).start()
         app.logger.info("✅ App initialized successfully.")
 
     @app.route('/login', methods=['GET', 'POST'])
