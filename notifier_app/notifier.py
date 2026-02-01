@@ -626,13 +626,13 @@ def reconcile_notifications(
             app.logger.warning(f"Notification reconciliation skipped: unable to connect to Plex ({exc}).")
             return
 
-        notifications = Notification.query.filter(
-            or_(Notification.show_key.isnot(None), Notification.show_guid.isnot(None))
-        ).all()
+        notifications = Notification.query.all()
 
         updated_count = 0
         scanned_count = 0
         mismatch_count = 0
+        missing_identifier_corrected = 0
+        missing_identifier_skipped = 0
         pending_updates = 0
         batch_size = 100
 
@@ -642,6 +642,36 @@ def reconcile_notifications(
             if stored_guid and stored_guid.startswith("title:"):
                 stored_guid = None
             if not stored_key and not stored_guid:
+                title, year = _extract_show_year_from_title(notif.show_title)
+                search_title = title or notif.show_title
+                if not search_title:
+                    missing_identifier_skipped += 1
+                    continue
+                matched_show = _search_show_by_title(app, tv_section, search_title, year)
+                if not matched_show:
+                    missing_identifier_skipped += 1
+                    continue
+                new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
+                new_show_guid = _extract_show_guid_from_metadata(matched_show)
+                if not new_show_key and not new_show_guid:
+                    missing_identifier_skipped += 1
+                    continue
+                if new_show_key and notif.show_key != new_show_key:
+                    notif.show_key = new_show_key
+                if new_show_guid and notif.show_guid != new_show_guid:
+                    notif.show_guid = new_show_guid
+                if db.session.is_modified(notif, include_collections=False):
+                    updated_count += 1
+                    missing_identifier_corrected += 1
+                    pending_updates += 1
+                    if pending_updates >= batch_size:
+                        try:
+                            db.session.commit()
+                            pending_updates = 0
+                        except Exception as exc:
+                            app.logger.warning(f"Notification reconciliation failed to commit updates: {exc}")
+                            db.session.rollback()
+                            return
                 continue
 
             scanned_count += 1
@@ -730,11 +760,14 @@ def reconcile_notifications(
                 return
 
         app.logger.info(
-            "Notification reconciliation (%s) updated %s notifications with %s mismatches across %s scanned rows.",
+            "Notification reconciliation (%s) updated %s notifications with %s mismatches across %s scanned rows. "
+            "Repaired %s missing-identifier notifications; skipped %s.",
             run_reason,
             updated_count,
             mismatch_count,
             scanned_count,
+            missing_identifier_corrected,
+            missing_identifier_skipped,
         )
 
 
