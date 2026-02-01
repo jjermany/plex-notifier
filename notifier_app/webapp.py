@@ -25,6 +25,7 @@ from .notifier import (
     check_new_episodes,
     register_debug_route,
     reconcile_user_preferences,
+    reconcile_notifications,
 )
 from .logging_utils import TZFormatter
 from .constants import (
@@ -267,18 +268,14 @@ def create_app():
                 if 'show_guid' not in existing_cols:
                     conn.execute(text('ALTER TABLE user_preferences ADD COLUMN show_guid VARCHAR'))
                     app.logger.info("Added show_guid column to user_preferences table")
-        # Backfill show_guid for existing notifications and preferences
+        # Backfill show_guid for existing preferences using known Plex identifiers
         try:
-            notifications = Notification.query.filter(Notification.show_guid.is_(None)).all()
-            if notifications:
-                for notif in notifications:
-                    notif.show_guid = normalize_show_identity(notif.show_title)
-                db.session.commit()
-
             show_guid_map = {
                 notif.show_key: notif.show_guid
                 for notif in Notification.query.filter(Notification.show_guid.isnot(None)).all()
-                if notif.show_key and notif.show_guid
+                if notif.show_key
+                and notif.show_guid
+                and not str(notif.show_guid).startswith("title:")
             }
             prefs = UserPreferences.query.filter(
                 UserPreferences.show_guid.is_(None),
@@ -306,6 +303,11 @@ def create_app():
             db.session.add(s)
             db.session.commit()
             app.logger.info("Created default settings")
+
+        reconcile_notifications(
+            app,
+            run_reason="startup",
+        )
 
         reconcile_user_preferences(
             app,
