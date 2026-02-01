@@ -30,6 +30,7 @@ from .notifier import (
     _extract_show_year_from_title,
     _notification_completeness_score,
     _notification_identity_label,
+    _select_notification_to_keep,
 )
 from .logging_utils import TZFormatter
 from .constants import (
@@ -490,52 +491,118 @@ def create_app():
         # Backfill notification identifiers from show identities when possible
         try:
             notifications = Notification.query.all()
-            updates = False
+            pending_updates = 0
+            batch_size = 100
             for notif in notifications:
-                identity = None
-                if notif.show_guid:
-                    identity = ShowIdentity.query.filter(
-                        or_(
-                            ShowIdentity.show_guid == notif.show_guid,
-                            ShowIdentity.plex_guid == notif.show_guid,
-                        )
-                    ).first()
-                if not identity and notif.show_key:
-                    identity = ShowIdentity.query.filter(
-                        or_(
-                            ShowIdentity.show_key == notif.show_key,
-                            ShowIdentity.plex_rating_key == notif.show_key,
-                        )
-                    ).first()
-                if not identity and notif.show_title:
-                    title, year = _extract_show_year_from_title(notif.show_title)
-                    fingerprint = _build_show_fingerprint(title or notif.show_title, year)
-                    if fingerprint:
+                with db.session.no_autoflush:
+                    identity = None
+                    if notif.show_guid:
                         identity = ShowIdentity.query.filter(
                             or_(
-                                ShowIdentity.fingerprint == fingerprint,
-                                ShowIdentity.fingerprint.like(f"{fingerprint}|%"),
+                                ShowIdentity.show_guid == notif.show_guid,
+                                ShowIdentity.plex_guid == notif.show_guid,
                             )
                         ).first()
-                if identity:
-                    if not notif.show_guid and identity.show_guid:
-                        notif.show_guid = identity.show_guid
-                    if not notif.tvdb_id and identity.tvdb_id:
-                        notif.tvdb_id = identity.tvdb_id
-                    if not notif.tmdb_id and identity.tmdb_id:
-                        notif.tmdb_id = identity.tmdb_id
-                    if not notif.imdb_id and identity.imdb_id:
-                        notif.imdb_id = identity.imdb_id
-                    if not notif.plex_guid and identity.plex_guid:
-                        notif.plex_guid = identity.plex_guid
-                if not notif.show_guid:
-                    title, year = _extract_show_year_from_title(notif.show_title)
-                    fallback = normalize_show_identity(title or notif.show_title, year)
-                    if fallback:
-                        notif.show_guid = fallback
+                    if not identity and notif.show_key:
+                        identity = ShowIdentity.query.filter(
+                            or_(
+                                ShowIdentity.show_key == notif.show_key,
+                                ShowIdentity.plex_rating_key == notif.show_key,
+                            )
+                        ).first()
+                    if not identity and notif.show_title:
+                        title, year = _extract_show_year_from_title(notif.show_title)
+                        fingerprint = _build_show_fingerprint(title or notif.show_title, year)
+                        if fingerprint:
+                            identity = ShowIdentity.query.filter(
+                                or_(
+                                    ShowIdentity.fingerprint == fingerprint,
+                                    ShowIdentity.fingerprint.like(f"{fingerprint}|%"),
+                                )
+                            ).first()
+
+                    target_show_guid = notif.show_guid
+                    target_tvdb_id = notif.tvdb_id
+                    target_tmdb_id = notif.tmdb_id
+                    target_imdb_id = notif.imdb_id
+                    target_plex_guid = notif.plex_guid
+
+                    if identity:
+                        if not target_show_guid and identity.show_guid:
+                            target_show_guid = identity.show_guid
+                        if not target_tvdb_id and identity.tvdb_id:
+                            target_tvdb_id = identity.tvdb_id
+                        if not target_tmdb_id and identity.tmdb_id:
+                            target_tmdb_id = identity.tmdb_id
+                        if not target_imdb_id and identity.imdb_id:
+                            target_imdb_id = identity.imdb_id
+                        if not target_plex_guid and identity.plex_guid:
+                            target_plex_guid = identity.plex_guid
+
+                    if not target_show_guid:
+                        title, year = _extract_show_year_from_title(notif.show_title)
+                        fallback = normalize_show_identity(title or notif.show_title, year)
+                        if fallback:
+                            target_show_guid = fallback
+
+                    conflict = None
+                    if target_plex_guid and target_plex_guid != notif.plex_guid:
+                        conflict = Notification.query.filter(
+                            Notification.email == notif.email,
+                            Notification.season == notif.season,
+                            Notification.episode == notif.episode,
+                            Notification.plex_guid == target_plex_guid,
+                            Notification.id != notif.id,
+                        ).first()
+
+                    if conflict:
+                        keep, reason = _select_notification_to_keep(notif, conflict)
+                        if keep is conflict:
+                            app.logger.info(
+                                "Notification backfill deleted notification %s in favor of %s: "
+                                "target plex_guid=%s email=%s season=%s episode=%s (reason=%s).",
+                                notif.id if notif.id is not None else "unknown",
+                                conflict.id if conflict.id is not None else "unknown",
+                                target_plex_guid,
+                                notif.email,
+                                notif.season,
+                                notif.episode,
+                                reason,
+                            )
+                            db.session.delete(notif)
+                            pending_updates += 1
+                            continue
+                        app.logger.info(
+                            "Notification backfill deleted conflicting notification %s: "
+                            "keeping notification %s for target plex_guid=%s email=%s season=%s episode=%s (reason=%s).",
+                            conflict.id if conflict.id is not None else "unknown",
+                            notif.id if notif.id is not None else "unknown",
+                            target_plex_guid,
+                            notif.email,
+                            notif.season,
+                            notif.episode,
+                            reason,
+                        )
+                        db.session.delete(conflict)
+                        pending_updates += 1
+
+                    if target_show_guid and target_show_guid != notif.show_guid:
+                        notif.show_guid = target_show_guid
+                    if target_tvdb_id and target_tvdb_id != notif.tvdb_id:
+                        notif.tvdb_id = target_tvdb_id
+                    if target_tmdb_id and target_tmdb_id != notif.tmdb_id:
+                        notif.tmdb_id = target_tmdb_id
+                    if target_imdb_id and target_imdb_id != notif.imdb_id:
+                        notif.imdb_id = target_imdb_id
+                    if target_plex_guid and target_plex_guid != notif.plex_guid:
+                        notif.plex_guid = target_plex_guid
+
                 if db.session.is_modified(notif, include_collections=False):
-                    updates = True
-            if updates:
+                    pending_updates += 1
+                if pending_updates >= batch_size:
+                    db.session.commit()
+                    pending_updates = 0
+            if pending_updates:
                 db.session.commit()
         except Exception as exc:
             app.logger.warning(f"Failed to backfill notification identifiers: {exc}")
