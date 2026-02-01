@@ -1051,6 +1051,29 @@ def reconcile_notifications(
             stored_guid = str(notif.show_guid) if notif.show_guid else None
             if stored_guid and stored_guid.startswith("title:"):
                 stored_guid = None
+            with db.session.no_autoflush:
+                existing_conflict = None
+                if stored_key:
+                    existing_conflict = Notification.query.filter(
+                        Notification.email == notif.email,
+                        Notification.show_key == stored_key,
+                        Notification.season == notif.season,
+                        Notification.episode == notif.episode,
+                        Notification.id != notif.id,
+                    ).first()
+
+            if existing_conflict:
+                app.logger.info(
+                    "Notification reconciliation skipped notification %s: "
+                    "duplicate record exists for email=%s show_key=%s season=%s episode=%s.",
+                    notif.id if notif.id is not None else "unknown",
+                    notif.email,
+                    stored_key,
+                    notif.season,
+                    notif.episode,
+                )
+                continue
+
             if not stored_key and not stored_guid:
                 title, year = _extract_show_year_from_title(notif.show_title)
                 search_title = title or notif.show_title
@@ -1109,6 +1132,24 @@ def reconcile_notifications(
                     )
                     continue
                 if new_show_key and notif.show_key != new_show_key:
+                    with db.session.no_autoflush:
+                        conflict = Notification.query.filter(
+                            Notification.email == notif.email,
+                            Notification.show_key == new_show_key,
+                            Notification.season == notif.season,
+                            Notification.episode == notif.episode,
+                            Notification.id != notif.id,
+                        ).first()
+                    if conflict:
+                        missing_identifier_skipped += 1
+                        app.logger.info(
+                            "Notification reconciliation skipped notification %s: "
+                            "target show_key=%s would conflict with notification %s.",
+                            notif.id if notif.id is not None else "unknown",
+                            new_show_key,
+                            conflict.id if conflict.id is not None else "unknown",
+                        )
+                        continue
                     notif.show_key = new_show_key
                 if new_show_guid and notif.show_guid != new_show_guid:
                     notif.show_guid = new_show_guid
@@ -1138,18 +1179,19 @@ def reconcile_notifications(
 
             scanned_count += 1
             title, year = _extract_show_year_from_title(notif.show_title)
-            matched_show, failure_reason = _resolve_show_match(
-                app,
-                plex,
-                tv_section,
-                show_guid=stored_guid,
-                show_key=stored_key,
-                title=title or notif.show_title,
-                year=year,
-                record_type="Notification",
-                record_id=notif.id,
-                force_title_fallback=True,
-            )
+            with db.session.no_autoflush:
+                matched_show, failure_reason = _resolve_show_match(
+                    app,
+                    plex,
+                    tv_section,
+                    show_guid=stored_guid,
+                    show_key=stored_key,
+                    title=title or notif.show_title,
+                    year=year,
+                    record_type="Notification",
+                    record_id=notif.id,
+                    force_title_fallback=True,
+                )
 
             if not matched_show:
                 app.logger.info(
@@ -1198,6 +1240,23 @@ def reconcile_notifications(
                 )
 
             if new_show_key and notif.show_key != new_show_key:
+                with db.session.no_autoflush:
+                    conflict = Notification.query.filter(
+                        Notification.email == notif.email,
+                        Notification.show_key == new_show_key,
+                        Notification.season == notif.season,
+                        Notification.episode == notif.episode,
+                        Notification.id != notif.id,
+                    ).first()
+                if conflict:
+                    app.logger.info(
+                        "Notification reconciliation skipped notification %s: "
+                        "target show_key=%s would conflict with notification %s.",
+                        notif.id if notif.id is not None else "unknown",
+                        new_show_key,
+                        conflict.id if conflict.id is not None else "unknown",
+                    )
+                    continue
                 notif.show_key = new_show_key
             if new_show_guid and notif.show_guid != new_show_guid:
                 notif.show_guid = new_show_guid
