@@ -525,6 +525,22 @@ def _resolve_show_match(
     for provider, guid_value in external_guid_candidates:
         matched_show = _fetch_show_by_guid(app, plex, tv_section, guid_value)
         if matched_show:
+            resolved_key = getattr(matched_show, "ratingKey", None)
+            resolved_title = getattr(matched_show, "title", None)
+            resolved_details = []
+            if resolved_key:
+                resolved_details.append(f"plex_key={resolved_key}")
+            if resolved_title:
+                resolved_details.append(f"plex_title='{resolved_title}'")
+            resolved_suffix = f" ({', '.join(resolved_details)})" if resolved_details else ""
+            app.logger.info(
+                "%s reconciliation external id match for %s: provider=%s guid=%s%s",
+                record_type,
+                record_id if record_id is not None else "unknown",
+                provider,
+                guid_value,
+                resolved_suffix,
+            )
             return matched_show, f"external_id_match:{provider}"
         failure_reason = "no_match_external_ids"
 
