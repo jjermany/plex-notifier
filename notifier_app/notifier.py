@@ -667,9 +667,12 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
                 first_seen_at = None
+                existing_first_seen_at = None
                 if rating_key:
-                    first_seen_at = existing_first_seen.get(rating_key)
-                    if not first_seen_at:
+                    existing_first_seen_at = existing_first_seen.get(rating_key)
+                    if existing_first_seen_at:
+                        first_seen_at = existing_first_seen_at
+                    else:
                         first_seen_at = now_dt
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
@@ -678,7 +681,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             )
                         )
 
-                first_seen_recent = first_seen_at is not None and first_seen_at >= cutoff_dt
+                first_seen_recent = (
+                    existing_first_seen_at is not None
+                    and first_seen_at is not None
+                    and first_seen_at >= cutoff_dt
+                )
                 if availability_recent or first_seen_recent:
                     recent_eps.append(ep)
 
