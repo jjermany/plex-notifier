@@ -376,6 +376,7 @@ def _resolve_show_match(
     year: Optional[int],
     record_type: str,
     record_id: Optional[int],
+    force_title_fallback: bool = False,
 ) -> Any:
     identity = _lookup_show_identity(show_guid=show_guid, show_key=show_key)
     stored_guids = [show_guid] if show_guid else []
@@ -421,6 +422,18 @@ def _resolve_show_match(
         identity_guid = identity_match.plex_guid or identity_match.show_guid
         if identity_guid:
             return _fetch_show_by_guid(app, plex, tv_section, identity_guid)
+
+    if force_title_fallback and title:
+        matched_show = _search_show_by_title(app, tv_section, title, year)
+        if matched_show:
+            app.logger.info(
+                "%s reconciliation recovered show via title fallback for %s: '%s'%s.",
+                record_type,
+                record_id if record_id is not None else "unknown",
+                title,
+                f" ({year})" if year else "",
+            )
+            return matched_show
 
     return None
 
@@ -880,6 +893,7 @@ def reconcile_user_preferences(
                 year=year,
                 record_type="Preference",
                 record_id=None,
+                force_title_fallback=True,
             )
 
             if not matched_show:
@@ -1031,6 +1045,7 @@ def reconcile_notifications(
                     year=year,
                     record_type="Notification",
                     record_id=notif.id,
+                    force_title_fallback=True,
                 )
                 if not matched_show:
                     missing_identifier_skipped += 1
@@ -1104,6 +1119,7 @@ def reconcile_notifications(
                 year=year,
                 record_type="Notification",
                 record_id=notif.id,
+                force_title_fallback=True,
             )
 
             if not matched_show:
