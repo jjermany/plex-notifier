@@ -172,6 +172,14 @@ def _get_recent_notifications(email: str, limit: int = NOTIFICATION_HISTORY_LIMI
                 notified.add(f"{notif.show_guid}|{season_episode}")
             if notif.show_key:
                 notified.add(f"{notif.show_key}|{season_episode}")
+            if notif.tvdb_id:
+                notified.add(f"tvdb://{notif.tvdb_id}|{season_episode}")
+            if notif.tmdb_id:
+                notified.add(f"tmdb://{notif.tmdb_id}|{season_episode}")
+            if notif.imdb_id:
+                notified.add(f"imdb://{notif.imdb_id}|{season_episode}")
+            if notif.plex_guid:
+                notified.add(f"{notif.plex_guid}|{season_episode}")
     except Exception as e:
         current_app.logger.warning(f"Could not query database for notifications: {e}")
 
@@ -198,6 +206,90 @@ def _notification_completeness_score(notification: Notification) -> int:
         notification.episode_key,
     )
     return sum(1 for value in identifiers if value)
+
+
+def _notification_identity_label(
+    *,
+    show_guid: Optional[str],
+    tvdb_id: Optional[str],
+    tmdb_id: Optional[str],
+    imdb_id: Optional[str],
+    plex_guid: Optional[str],
+    show_key: Optional[str] = None,
+) -> Optional[str]:
+    if show_guid:
+        return f"guid:{show_guid}"
+    if tvdb_id:
+        return f"tvdb:{tvdb_id}"
+    if tmdb_id:
+        return f"tmdb:{tmdb_id}"
+    if imdb_id:
+        return f"imdb:{imdb_id}"
+    if plex_guid:
+        return f"plex:{plex_guid}"
+    if show_key:
+        return f"key:{show_key}"
+    return None
+
+
+def _notification_identity_filters(
+    *,
+    show_guid: Optional[str],
+    tvdb_id: Optional[str],
+    tmdb_id: Optional[str],
+    imdb_id: Optional[str],
+    plex_guid: Optional[str],
+    show_key: Optional[str] = None,
+    include_show_key_fallback: bool = True,
+) -> list[Any]:
+    filters: list[Any] = []
+    if show_guid:
+        filters.append(Notification.show_guid == show_guid)
+    if tvdb_id:
+        filters.append(Notification.tvdb_id == tvdb_id)
+    if tmdb_id:
+        filters.append(Notification.tmdb_id == tmdb_id)
+    if imdb_id:
+        filters.append(Notification.imdb_id == imdb_id)
+    if plex_guid:
+        filters.append(Notification.plex_guid == plex_guid)
+    if not filters and include_show_key_fallback and show_key:
+        filters.append(Notification.show_key == show_key)
+    return filters
+
+
+def _find_notification_conflict(
+    *,
+    email: str,
+    season: int,
+    episode: int,
+    show_guid: Optional[str],
+    tvdb_id: Optional[str],
+    tmdb_id: Optional[str],
+    imdb_id: Optional[str],
+    plex_guid: Optional[str],
+    show_key: Optional[str] = None,
+    exclude_id: Optional[int] = None,
+) -> Optional[Notification]:
+    identity_filters = _notification_identity_filters(
+        show_guid=show_guid,
+        tvdb_id=tvdb_id,
+        tmdb_id=tmdb_id,
+        imdb_id=imdb_id,
+        plex_guid=plex_guid,
+        show_key=show_key,
+    )
+    if not identity_filters:
+        return None
+    query = Notification.query.filter(
+        Notification.email == email,
+        Notification.season == season,
+        Notification.episode == episode,
+        or_(*identity_filters),
+    )
+    if exclude_id is not None:
+        query = query.filter(Notification.id != exclude_id)
+    return query.first()
 
 
 def _select_notification_to_keep(
@@ -356,15 +448,18 @@ def _lookup_show_identity(
     show_guid: Optional[str],
     show_key: Optional[str],
 ) -> Optional[ShowIdentity]:
-    filters = []
     if show_guid:
-        filters.append(ShowIdentity.show_guid == show_guid)
+        match = ShowIdentity.query.filter(ShowIdentity.show_guid == show_guid).first()
+        if match:
+            return match
     if show_key:
-        filters.append(ShowIdentity.show_key == show_key)
-        filters.append(ShowIdentity.plex_rating_key == show_key)
-    if not filters:
-        return None
-    return ShowIdentity.query.filter(or_(*filters)).first()
+        return ShowIdentity.query.filter(
+            or_(
+                ShowIdentity.show_key == show_key,
+                ShowIdentity.plex_rating_key == show_key,
+            )
+        ).first()
+    return None
 
 
 def _find_identity_by_fingerprint(
@@ -714,16 +809,38 @@ def reconcile_user_preferences(
                     Notification.email,
                     Notification.show_key,
                     Notification.show_guid,
+                    Notification.tvdb_id,
+                    Notification.tmdb_id,
+                    Notification.imdb_id,
+                    Notification.plex_guid,
                     Notification.show_title,
                 )
                 .distinct()
                 .all()
             )
             seen_identity_keys: dict[str, set[tuple[Optional[str], Optional[str], Optional[str]]]] = {}
-            for email, show_key, show_guid, show_title in notification_identity_rows:
+            for (
+                email,
+                show_key,
+                show_guid,
+                tvdb_id,
+                tmdb_id,
+                imdb_id,
+                plex_guid,
+                show_title,
+            ) in notification_identity_rows:
                 normalized_email = normalize_email(email)
                 title, year = _extract_show_year_from_title(show_title)
+                identity_label = _notification_identity_label(
+                    show_guid=str(show_guid) if show_guid else None,
+                    tvdb_id=str(tvdb_id) if tvdb_id else None,
+                    tmdb_id=str(tmdb_id) if tmdb_id else None,
+                    imdb_id=str(imdb_id) if imdb_id else None,
+                    plex_guid=str(plex_guid) if plex_guid else None,
+                    show_key=str(show_key) if show_key else None,
+                )
                 identity_key = (
+                    identity_label,
                     str(show_guid) if show_guid else None,
                     str(show_key) if show_key else None,
                 )
@@ -1087,15 +1204,18 @@ def reconcile_notifications(
             if stored_guid and stored_guid.startswith("title:"):
                 stored_guid = None
             with db.session.no_autoflush:
-                existing_conflict = None
-                if stored_key:
-                    existing_conflict = Notification.query.filter(
-                        Notification.email == notif.email,
-                        Notification.show_key == stored_key,
-                        Notification.season == notif.season,
-                        Notification.episode == notif.episode,
-                        Notification.id != notif.id,
-                    ).first()
+                existing_conflict = _find_notification_conflict(
+                    email=notif.email,
+                    season=notif.season,
+                    episode=notif.episode,
+                    show_guid=stored_guid,
+                    tvdb_id=notif.tvdb_id,
+                    tmdb_id=notif.tmdb_id,
+                    imdb_id=notif.imdb_id,
+                    plex_guid=notif.plex_guid,
+                    show_key=stored_key,
+                    exclude_id=notif.id,
+                )
 
             if existing_conflict:
                 app.logger.info(
@@ -1144,6 +1264,7 @@ def reconcile_notifications(
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
                 show_guids = _extract_show_guid_from_metadata(matched_show)
                 new_show_guid = _select_primary_guid(show_guids)
+                external_ids = _extract_external_show_ids(show_guids)
                 leaf_count, child_count = _extract_show_counts(matched_show)
                 identity_updated = _upsert_show_identity(
                     show_guid=new_show_guid,
@@ -1168,13 +1289,18 @@ def reconcile_notifications(
                     continue
                 if new_show_key and notif.show_key != new_show_key:
                     with db.session.no_autoflush:
-                        conflict = Notification.query.filter(
-                            Notification.email == notif.email,
-                            Notification.show_key == new_show_key,
-                            Notification.season == notif.season,
-                            Notification.episode == notif.episode,
-                            Notification.id != notif.id,
-                        ).first()
+                        conflict = _find_notification_conflict(
+                            email=notif.email,
+                            season=notif.season,
+                            episode=notif.episode,
+                            show_guid=new_show_guid,
+                            tvdb_id=external_ids.get("tvdb_id"),
+                            tmdb_id=external_ids.get("tmdb_id"),
+                            imdb_id=external_ids.get("imdb_id"),
+                            plex_guid=external_ids.get("plex_guid"),
+                            show_key=new_show_key,
+                            exclude_id=notif.id,
+                        )
                     if conflict:
                         keep, reason = _select_notification_to_keep(notif, conflict)
                         if keep is conflict:
@@ -1209,6 +1335,14 @@ def reconcile_notifications(
                     notif.show_key = new_show_key
                 if new_show_guid and notif.show_guid != new_show_guid:
                     notif.show_guid = new_show_guid
+                if external_ids.get("tvdb_id") and notif.tvdb_id != external_ids.get("tvdb_id"):
+                    notif.tvdb_id = external_ids.get("tvdb_id")
+                if external_ids.get("tmdb_id") and notif.tmdb_id != external_ids.get("tmdb_id"):
+                    notif.tmdb_id = external_ids.get("tmdb_id")
+                if external_ids.get("imdb_id") and notif.imdb_id != external_ids.get("imdb_id"):
+                    notif.imdb_id = external_ids.get("imdb_id")
+                if external_ids.get("plex_guid") and notif.plex_guid != external_ids.get("plex_guid"):
+                    notif.plex_guid = external_ids.get("plex_guid")
                 if db.session.is_modified(notif, include_collections=False):
                     updated_count += 1
                     missing_identifier_corrected += 1
@@ -1265,6 +1399,7 @@ def reconcile_notifications(
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
             show_guids = _extract_show_guid_from_metadata(matched_show)
             new_show_guid = _select_primary_guid(show_guids)
+            external_ids = _extract_external_show_ids(show_guids)
             leaf_count, child_count = _extract_show_counts(matched_show)
             identity_updated = _upsert_show_identity(
                 show_guid=new_show_guid,
@@ -1297,13 +1432,18 @@ def reconcile_notifications(
 
             if new_show_key and notif.show_key != new_show_key:
                 with db.session.no_autoflush:
-                    conflict = Notification.query.filter(
-                        Notification.email == notif.email,
-                        Notification.show_key == new_show_key,
-                        Notification.season == notif.season,
-                        Notification.episode == notif.episode,
-                        Notification.id != notif.id,
-                    ).first()
+                    conflict = _find_notification_conflict(
+                        email=notif.email,
+                        season=notif.season,
+                        episode=notif.episode,
+                        show_guid=new_show_guid,
+                        tvdb_id=external_ids.get("tvdb_id"),
+                        tmdb_id=external_ids.get("tmdb_id"),
+                        imdb_id=external_ids.get("imdb_id"),
+                        plex_guid=external_ids.get("plex_guid"),
+                        show_key=new_show_key,
+                        exclude_id=notif.id,
+                    )
                 if conflict:
                     keep, reason = _select_notification_to_keep(notif, conflict)
                     if keep is conflict:
@@ -1337,6 +1477,14 @@ def reconcile_notifications(
                 notif.show_key = new_show_key
             if new_show_guid and notif.show_guid != new_show_guid:
                 notif.show_guid = new_show_guid
+            if external_ids.get("tvdb_id") and notif.tvdb_id != external_ids.get("tvdb_id"):
+                notif.tvdb_id = external_ids.get("tvdb_id")
+            if external_ids.get("tmdb_id") and notif.tmdb_id != external_ids.get("tmdb_id"):
+                notif.tmdb_id = external_ids.get("tmdb_id")
+            if external_ids.get("imdb_id") and notif.imdb_id != external_ids.get("imdb_id"):
+                notif.imdb_id = external_ids.get("imdb_id")
+            if external_ids.get("plex_guid") and notif.plex_guid != external_ids.get("plex_guid"):
+                notif.plex_guid = external_ids.get("plex_guid")
 
             if db.session.is_modified(notif, include_collections=False):
                 updated_count += 1
@@ -1935,6 +2083,29 @@ def _save_notification_to_db(
             for key in ("tvdb_id", "tmdb_id", "imdb_id", "plex_guid"):
                 if not external_ids.get(key) and getattr(identity, key, None):
                     external_ids[key] = getattr(identity, key)
+        existing = _find_notification_conflict(
+            email=normalized_email,
+            season=episode.parentIndex,
+            episode=episode.index,
+            show_guid=show_guid,
+            tvdb_id=external_ids.get("tvdb_id"),
+            tmdb_id=external_ids.get("tmdb_id"),
+            imdb_id=external_ids.get("imdb_id"),
+            plex_guid=external_ids.get("plex_guid"),
+            show_key=show_key,
+        )
+        if existing:
+            updated = False
+            if show_guid and existing.show_guid != show_guid:
+                existing.show_guid = show_guid
+                updated = True
+            for key, value in external_ids.items():
+                if value and getattr(existing, key) != value:
+                    setattr(existing, key, value)
+                    updated = True
+            if updated:
+                db.session.commit()
+            return
         notification = Notification(
             email=normalized_email,
             show_title=show_title,

@@ -10,7 +10,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, Notification, ShowIdentity
-from .utils import normalize_email
+from .utils import normalize_email, normalize_show_identity
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
     DEFAULT_HISTORY_LIMIT,
@@ -26,6 +26,10 @@ from .notifier import (
     register_debug_route,
     reconcile_user_preferences,
     reconcile_notifications,
+    _build_show_fingerprint,
+    _extract_show_year_from_title,
+    _notification_completeness_score,
+    _notification_identity_label,
 )
 from .logging_utils import TZFormatter
 from .constants import (
@@ -34,7 +38,7 @@ from .constants import (
     APP_LOG_MAX_BYTES,
     LOG_BACKUP_COUNT,
 )
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, or_
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -324,6 +328,218 @@ def create_app():
                 conn.execute(
                     text("CREATE INDEX IF NOT EXISTS idx_show_guid_key ON show_identities (show_guid, show_key)")
                 )
+        # Migrate notifications table to stable-identifier unique constraints
+        if 'notifications' in inspector.get_table_names():
+            try:
+                constraints = inspector.get_unique_constraints('notifications')
+                constraint_names = {c['name'] for c in constraints}
+                expected_constraints = {
+                    "uq_notification_show_guid",
+                    "uq_notification_tvdb_id",
+                    "uq_notification_tmdb_id",
+                    "uq_notification_imdb_id",
+                    "uq_notification_plex_guid",
+                }
+                if not expected_constraints.issubset(constraint_names):
+                    if db.engine.dialect.name == "sqlite":
+                        notifications = Notification.query.order_by(Notification.id).all()
+                        deduped: dict[tuple[str, int, int, Optional[str]], Notification] = {}
+                        for notif in notifications:
+                            identity_label = _notification_identity_label(
+                                show_guid=str(notif.show_guid) if notif.show_guid else None,
+                                tvdb_id=str(notif.tvdb_id) if notif.tvdb_id else None,
+                                tmdb_id=str(notif.tmdb_id) if notif.tmdb_id else None,
+                                imdb_id=str(notif.imdb_id) if notif.imdb_id else None,
+                                plex_guid=str(notif.plex_guid) if notif.plex_guid else None,
+                                show_key=str(notif.show_key) if notif.show_key else None,
+                            )
+                            if not identity_label:
+                                title, year = _extract_show_year_from_title(notif.show_title)
+                                fallback = normalize_show_identity(title or notif.show_title, year)
+                                if fallback:
+                                    identity_label = f"guid:{fallback}"
+                            if not identity_label and notif.show_key:
+                                identity_label = f"key:{notif.show_key}"
+                            if not identity_label:
+                                identity_label = f"id:{notif.id}"
+                            identity_key = (notif.email, notif.season, notif.episode, identity_label)
+                            existing = deduped.get(identity_key)
+                            if not existing:
+                                deduped[identity_key] = notif
+                                continue
+                            existing_score = _notification_completeness_score(existing)
+                            candidate_score = _notification_completeness_score(notif)
+                            if candidate_score > existing_score:
+                                deduped[identity_key] = notif
+                                continue
+                            if candidate_score < existing_score:
+                                continue
+                            existing_ts = existing.timestamp or datetime.min.replace(tzinfo=timezone.utc)
+                            candidate_ts = notif.timestamp or datetime.min.replace(tzinfo=timezone.utc)
+                            if candidate_ts > existing_ts:
+                                deduped[identity_key] = notif
+                        with db.engine.begin() as conn:
+                            conn.execute(text("""
+                                CREATE TABLE notifications_new (
+                                    id INTEGER PRIMARY KEY,
+                                    email VARCHAR NOT NULL,
+                                    show_title VARCHAR NOT NULL,
+                                    show_key VARCHAR NOT NULL,
+                                    show_guid VARCHAR,
+                                    tvdb_id VARCHAR,
+                                    tmdb_id VARCHAR,
+                                    imdb_id VARCHAR,
+                                    plex_guid VARCHAR,
+                                    season INTEGER NOT NULL,
+                                    episode INTEGER NOT NULL,
+                                    episode_title VARCHAR,
+                                    episode_key VARCHAR,
+                                    timestamp DATETIME NOT NULL,
+                                    CONSTRAINT uq_notification_show_guid UNIQUE (email, show_guid, season, episode),
+                                    CONSTRAINT uq_notification_tvdb_id UNIQUE (email, tvdb_id, season, episode),
+                                    CONSTRAINT uq_notification_tmdb_id UNIQUE (email, tmdb_id, season, episode),
+                                    CONSTRAINT uq_notification_imdb_id UNIQUE (email, imdb_id, season, episode),
+                                    CONSTRAINT uq_notification_plex_guid UNIQUE (email, plex_guid, season, episode)
+                                )
+                            """))
+                            insert_stmt = text("""
+                                INSERT INTO notifications_new (
+                                    id,
+                                    email,
+                                    show_title,
+                                    show_key,
+                                    show_guid,
+                                    tvdb_id,
+                                    tmdb_id,
+                                    imdb_id,
+                                    plex_guid,
+                                    season,
+                                    episode,
+                                    episode_title,
+                                    episode_key,
+                                    timestamp
+                                )
+                                VALUES (
+                                    :id,
+                                    :email,
+                                    :show_title,
+                                    :show_key,
+                                    :show_guid,
+                                    :tvdb_id,
+                                    :tmdb_id,
+                                    :imdb_id,
+                                    :plex_guid,
+                                    :season,
+                                    :episode,
+                                    :episode_title,
+                                    :episode_key,
+                                    :timestamp
+                                )
+                            """)
+                            for notif in deduped.values():
+                                conn.execute(insert_stmt, {
+                                    "id": notif.id,
+                                    "email": notif.email,
+                                    "show_title": notif.show_title,
+                                    "show_key": notif.show_key,
+                                    "show_guid": notif.show_guid,
+                                    "tvdb_id": notif.tvdb_id,
+                                    "tmdb_id": notif.tmdb_id,
+                                    "imdb_id": notif.imdb_id,
+                                    "plex_guid": notif.plex_guid,
+                                    "season": notif.season,
+                                    "episode": notif.episode,
+                                    "episode_title": notif.episode_title,
+                                    "episode_key": notif.episode_key,
+                                    "timestamp": notif.timestamp,
+                                })
+                            conn.execute(text("DROP TABLE notifications"))
+                            conn.execute(text("ALTER TABLE notifications_new RENAME TO notifications"))
+                            conn.execute(text(
+                                "CREATE INDEX idx_email_timestamp ON notifications (email, timestamp)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_show_key_season_episode ON notifications (show_key, season, episode)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_show_guid ON notifications (show_guid)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_notification_tvdb_id ON notifications (tvdb_id)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_notification_tmdb_id ON notifications (tmdb_id)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_notification_imdb_id ON notifications (imdb_id)"
+                            ))
+                            conn.execute(text(
+                                "CREATE INDEX idx_notification_plex_guid ON notifications (plex_guid)"
+                            ))
+                        app.logger.info(
+                            "Rebuilt notifications table with stable-identifier unique constraints."
+                        )
+                        inspector = inspect(db.engine)
+                    else:
+                        app.logger.warning(
+                            "Legacy notifications table detected without stable unique constraints. "
+                            "Manual migration required for non-SQLite database."
+                        )
+            except Exception as exc:
+                app.logger.warning(f"Could not check notifications constraints: {exc}")
+        # Backfill notification identifiers from show identities when possible
+        try:
+            notifications = Notification.query.all()
+            updates = False
+            for notif in notifications:
+                identity = None
+                if notif.show_guid:
+                    identity = ShowIdentity.query.filter(
+                        or_(
+                            ShowIdentity.show_guid == notif.show_guid,
+                            ShowIdentity.plex_guid == notif.show_guid,
+                        )
+                    ).first()
+                if not identity and notif.show_key:
+                    identity = ShowIdentity.query.filter(
+                        or_(
+                            ShowIdentity.show_key == notif.show_key,
+                            ShowIdentity.plex_rating_key == notif.show_key,
+                        )
+                    ).first()
+                if not identity and notif.show_title:
+                    title, year = _extract_show_year_from_title(notif.show_title)
+                    fingerprint = _build_show_fingerprint(title or notif.show_title, year)
+                    if fingerprint:
+                        identity = ShowIdentity.query.filter(
+                            or_(
+                                ShowIdentity.fingerprint == fingerprint,
+                                ShowIdentity.fingerprint.like(f"{fingerprint}|%"),
+                            )
+                        ).first()
+                if identity:
+                    if not notif.show_guid and identity.show_guid:
+                        notif.show_guid = identity.show_guid
+                    if not notif.tvdb_id and identity.tvdb_id:
+                        notif.tvdb_id = identity.tvdb_id
+                    if not notif.tmdb_id and identity.tmdb_id:
+                        notif.tmdb_id = identity.tmdb_id
+                    if not notif.imdb_id and identity.imdb_id:
+                        notif.imdb_id = identity.imdb_id
+                    if not notif.plex_guid and identity.plex_guid:
+                        notif.plex_guid = identity.plex_guid
+                if not notif.show_guid:
+                    title, year = _extract_show_year_from_title(notif.show_title)
+                    fallback = normalize_show_identity(title or notif.show_title, year)
+                    if fallback:
+                        notif.show_guid = fallback
+                if db.session.is_modified(notif, include_collections=False):
+                    updates = True
+            if updates:
+                db.session.commit()
+        except Exception as exc:
+            app.logger.warning(f"Failed to backfill notification identifiers: {exc}")
+            db.session.rollback()
         # Backfill show_guid for existing preferences using known Plex identifiers
         try:
             show_guid_map = {

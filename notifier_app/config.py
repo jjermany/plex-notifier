@@ -57,13 +57,18 @@ class Notification(db.Model):
 
     __table_args__ = (
         # Prevent duplicate notifications for same episode to same user
-        db.UniqueConstraint('email', 'show_key', 'season', 'episode', name='uq_notification'),
+        db.UniqueConstraint('email', 'show_guid', 'season', 'episode', name='uq_notification_show_guid'),
+        db.UniqueConstraint('email', 'tvdb_id', 'season', 'episode', name='uq_notification_tvdb_id'),
+        db.UniqueConstraint('email', 'tmdb_id', 'season', 'episode', name='uq_notification_tmdb_id'),
+        db.UniqueConstraint('email', 'imdb_id', 'season', 'episode', name='uq_notification_imdb_id'),
+        db.UniqueConstraint('email', 'plex_guid', 'season', 'episode', name='uq_notification_plex_guid'),
         db.Index('idx_email_timestamp', 'email', 'timestamp'),
         db.Index('idx_show_key_season_episode', 'show_key', 'season', 'episode'),
         db.Index('idx_show_guid', 'show_guid'),
         db.Index('idx_notification_tvdb_id', 'tvdb_id'),
         db.Index('idx_notification_tmdb_id', 'tmdb_id'),
         db.Index('idx_notification_imdb_id', 'imdb_id'),
+        db.Index('idx_notification_plex_guid', 'plex_guid'),
     )
 
 
