@@ -136,7 +136,7 @@
                 {% for show in opted_out %}
                 <li>
                   {{ show.title }}
-                  {% if show.show_key or show.show_guid or show.show_fallback_id %}
+                  {% if show.show_key or show.show_guid %}
                   <div class="small text-muted">
                     {% set parts = [] %}
                     {% if show.show_key %}
@@ -144,9 +144,6 @@
                     {% endif %}
                     {% if show.show_guid %}
                       {% set _ = parts.append('GUID: ' ~ show.show_guid) %}
-                    {% endif %}
-                    {% if show.show_fallback_id %}
-                      {% set _ = parts.append('Fallback: ' ~ show.show_fallback_id) %}
                     {% endif %}
                     {{ parts | join(' • ') }}
                   </div>

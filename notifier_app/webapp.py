@@ -10,7 +10,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from .config import db, Settings, UserPreferences, Notification
-from .utils import normalize_email, email_to_filename, normalize_show_identity
+from .utils import normalize_email
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
     DEFAULT_HISTORY_LIMIT,
@@ -538,7 +538,6 @@ def create_app():
         # Get shows from database notifications (primary source) with last notification date
         show_map = {}  # key -> {title, last_notified} mapping
         show_key_lookup = {}
-        fallback_lookup = {}
 
         # Get most recent notification for each show
         from sqlalchemy import func
@@ -558,23 +557,19 @@ def create_app():
             if source.get('last_notified'):
                 if not target.get('last_notified') or source['last_notified'] > target['last_notified']:
                     target['last_notified'] = source['last_notified']
-            for key in ('show_guid', 'show_key', 'show_fallback_id'):
+            for key in ('show_guid', 'show_key'):
                 if source.get(key) and not target.get(key):
                     target[key] = source[key]
             if source.get('title') and not target.get('title'):
                 target['title'] = source['title']
 
-        def _resolve_existing_show_id(show_guid, show_key, fallback_id):
+        def _resolve_existing_show_id(show_guid, show_key):
             if show_guid and show_guid in show_map:
                 return show_guid
             if show_key and show_key in show_key_lookup:
                 return show_key_lookup[show_key]
-            if fallback_id and fallback_id in fallback_lookup:
-                return fallback_lookup[fallback_id]
             if show_key and show_key in show_map:
                 return show_key
-            if fallback_id and fallback_id in show_map:
-                return fallback_id
             return None
 
         def _rekey_entry(existing_key, new_key):
@@ -587,22 +582,19 @@ def create_app():
                 show_map[new_key] = existing_entry
             if existing_entry.get("show_key"):
                 show_key_lookup[existing_entry["show_key"]] = new_key
-            if existing_entry.get("show_fallback_id"):
-                fallback_lookup[existing_entry["show_fallback_id"]] = new_key
-
         for show_key, show_guid, show_title, last_notified in show_latest:
-            fallback_id = normalize_show_identity(show_title)
-            existing_id = _resolve_existing_show_id(show_guid, show_key, fallback_id)
+            existing_id = _resolve_existing_show_id(show_guid, show_key)
             if show_guid and existing_id and existing_id != show_guid:
                 _rekey_entry(existing_id, show_guid)
                 existing_id = show_guid
-            show_id = existing_id or show_guid or show_key or fallback_id
+            show_id = existing_id or show_guid or show_key
+            if not show_id:
+                continue
             current_entry = {
                 'title': show_title,
                 'last_notified': last_notified,
                 'show_guid': show_guid,
                 'show_key': show_key,
-                'show_fallback_id': fallback_id,
             }
             if show_id in show_map:
                 _merge_show_entry(show_map[show_id], current_entry)
@@ -610,52 +602,12 @@ def create_app():
                 show_map[show_id] = current_entry
             if show_key:
                 show_key_lookup[show_key] = show_id
-            if fallback_id:
-                fallback_lookup[fallback_id] = show_id
-
-        # Fallback to log file if database is empty (backward compatibility)
-        if not show_map:
-            log_dir = os.path.join(os.path.dirname(__file__), "../instance/logs")
-            safe_filename = email_to_filename(email)
-            log_file = os.path.join(log_dir, f"{safe_filename}-notification.log")
-
-            if os.path.exists(log_file):
-                with open(log_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if "Notified:" in line and "[Key:" in line:
-                            try:
-                                parts = line.split("Notified: ")[1]
-                                show_title = parts.split(" [Key:")[0].strip()
-                                key_part = parts.split("[Key:")[1]
-                                show_key = key_part.split("]")[0]
-                                # For log file entries, we don't have timestamp, set to None
-                                fallback_id = normalize_show_identity(show_title)
-                                show_id = fallback_id or show_key
-                                show_map[show_id] = {
-                                    'title': show_title,
-                                    'last_notified': None,
-                                    'show_guid': None,
-                                    'show_key': show_key,
-                                    'show_fallback_id': fallback_id,
-                                }
-                                if show_key:
-                                    show_key_lookup[show_key] = show_id
-                                if fallback_id:
-                                    fallback_lookup[fallback_id] = show_id
-                            except Exception:
-                                continue
 
         show_key_to_id = {
             info['show_key']: show_id
             for show_id, info in show_map.items()
             if info.get('show_key')
         }
-        fallback_id_to_id = {
-            info['show_fallback_id']: show_id
-            for show_id, info in show_map.items()
-            if info.get('show_fallback_id')
-        }
-
         user_prefs = UserPreferences.query.filter(
             UserPreferences.email.in_([canon, email])
         ).all()
@@ -666,12 +618,12 @@ def create_app():
             if pref.show_key is None:
                 continue
             show_id = pref.show_guid
-            if show_id and show_id in fallback_id_to_id:
-                show_id = fallback_id_to_id[show_id]
             if not show_id and pref.show_key in show_key_to_id:
                 show_id = show_key_to_id[pref.show_key]
-                pref.show_guid = show_id
-                prefs_updated = True
+                mapped_guid = show_map[show_id].get("show_guid")
+                if mapped_guid and pref.show_guid != mapped_guid:
+                    pref.show_guid = mapped_guid
+                    prefs_updated = True
             opted_out_shows.add(show_id or pref.show_key)
 
         if prefs_updated:
@@ -697,7 +649,6 @@ def create_app():
                 'key': key,
                 'show_key': info.get('show_key') or "",
                 'show_guid': info.get('show_guid') or "",
-                'show_fallback_id': info.get('show_fallback_id') or "",
                 'title': info['title'],
                 'opted_out': key in opted_out_shows,
                 'last_notified': info['last_notified']
@@ -938,7 +889,6 @@ def create_app():
                             "title": n.show_title,
                             "show_key": n.show_key,
                             "show_guid": n.show_guid,
-                            "show_fallback_id": normalize_show_identity(n.show_title),
                         }
 
                 opted_out = []
@@ -951,14 +901,12 @@ def create_app():
                             "title": info["title"],
                             "show_key": info["show_key"],
                             "show_guid": info.get("show_guid") or p.show_guid or "",
-                            "show_fallback_id": info.get("show_fallback_id") or "",
                         })
                     else:
                         opted_out.append({
                             "title": p.show_key,
                             "show_key": p.show_key,
                             "show_guid": p.show_guid or "",
-                            "show_fallback_id": "",
                         })
 
                 # Generate subscription token for this user
