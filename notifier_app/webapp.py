@@ -554,6 +554,8 @@ def create_app():
 
         # Get shows from database notifications (primary source) with last notification date
         show_map = {}  # key -> {title, last_notified} mapping
+        show_key_lookup = {}
+        fallback_lookup = {}
 
         # Get most recent notification for each show
         from sqlalchemy import func
@@ -579,22 +581,39 @@ def create_app():
             if source.get('title') and not target.get('title'):
                 target['title'] = source['title']
 
+        def _resolve_existing_show_id(show_guid, show_key, fallback_id):
+            if show_guid and show_guid in show_map:
+                return show_guid
+            if show_key and show_key in show_key_lookup:
+                return show_key_lookup[show_key]
+            if fallback_id and fallback_id in fallback_lookup:
+                return fallback_lookup[fallback_id]
+            if show_key and show_key in show_map:
+                return show_key
+            if fallback_id and fallback_id in show_map:
+                return fallback_id
+            return None
+
+        def _rekey_entry(existing_key, new_key):
+            if existing_key == new_key:
+                return
+            existing_entry = show_map.pop(existing_key)
+            if new_key in show_map:
+                _merge_show_entry(show_map[new_key], existing_entry)
+            else:
+                show_map[new_key] = existing_entry
+            if existing_entry.get("show_key"):
+                show_key_lookup[existing_entry["show_key"]] = new_key
+            if existing_entry.get("show_fallback_id"):
+                fallback_lookup[existing_entry["show_fallback_id"]] = new_key
+
         for show_key, show_guid, show_title, last_notified in show_latest:
             fallback_id = normalize_show_identity(show_title)
-            show_id = show_guid or fallback_id or show_key
-            if show_guid:
-                candidate_ids = []
-                if fallback_id and fallback_id in show_map and fallback_id != show_guid:
-                    candidate_ids.append(fallback_id)
-                if show_key and show_key in show_map and show_key not in candidate_ids and show_key != show_guid:
-                    candidate_ids.append(show_key)
-                for candidate_id in candidate_ids:
-                    existing_entry = show_map.pop(candidate_id)
-                    if show_guid not in show_map:
-                        show_map[show_guid] = existing_entry
-                    else:
-                        _merge_show_entry(show_map[show_guid], existing_entry)
-                show_id = show_guid
+            existing_id = _resolve_existing_show_id(show_guid, show_key, fallback_id)
+            if show_guid and existing_id and existing_id != show_guid:
+                _rekey_entry(existing_id, show_guid)
+                existing_id = show_guid
+            show_id = existing_id or show_guid or show_key or fallback_id
             current_entry = {
                 'title': show_title,
                 'last_notified': last_notified,
@@ -604,8 +623,12 @@ def create_app():
             }
             if show_id in show_map:
                 _merge_show_entry(show_map[show_id], current_entry)
-                continue
-            show_map[show_id] = current_entry
+            else:
+                show_map[show_id] = current_entry
+            if show_key:
+                show_key_lookup[show_key] = show_id
+            if fallback_id:
+                fallback_lookup[fallback_id] = show_id
 
         # Fallback to log file if database is empty (backward compatibility)
         if not show_map:
@@ -632,6 +655,10 @@ def create_app():
                                     'show_key': show_key,
                                     'show_fallback_id': fallback_id,
                                 }
+                                if show_key:
+                                    show_key_lookup[show_key] = show_id
+                                if fallback_id:
+                                    fallback_lookup[fallback_id] = show_id
                             except Exception:
                                 continue
 
