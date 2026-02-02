@@ -831,6 +831,7 @@ def create_app():
                 else:
                     pref = UserPreferences(email=canon)
             pref.global_opt_out = global_opt_out
+            pref.show_opt_out = False
             db.session.add(pref)
 
             # Only delete opt-outs for shows that are visible on the current page
