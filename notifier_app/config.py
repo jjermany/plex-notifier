@@ -27,7 +27,7 @@ class UserPreferences(db.Model):
     global_opt_out = db.Column(db.Boolean, default=False)
     show_key = db.Column(db.String, nullable=True, index=True)  # grandparentRatingKey
     show_guid = db.Column(db.String, nullable=True, index=True)  # stable show identifier
-    show_opt_out = db.Column(db.Boolean, default=True)  # opt out of this show
+    show_opt_out = db.Column(db.Boolean, default=False)  # opt out of this show
 
     # Composite unique constraint: one preference record per (email, show_key) combination
     __table_args__ = (
