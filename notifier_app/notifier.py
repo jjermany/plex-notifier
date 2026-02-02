@@ -812,6 +812,7 @@ def reconcile_user_preferences(
             UserPreferences.show_key.is_(None),
             UserPreferences.show_guid.is_(None),
             UserPreferences.show_opt_out.is_(True),
+            UserPreferences.global_opt_out.is_(True),
         ).all()
         preferences = UserPreferences.query.filter(
             or_(UserPreferences.show_key.isnot(None), UserPreferences.show_guid.isnot(None))
