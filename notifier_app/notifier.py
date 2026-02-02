@@ -1760,8 +1760,32 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     continue
 
                 has_watched_show, _ = _user_has_watched_show(s, uid, show_key)
-                if not has_watched_show:
+                is_subscribed, subscription_reason = _user_is_subscribed_for_show(
+                    email=canon,
+                    alternate_email=user_email,
+                    show_key=show_key_str,
+                    show_guid=show_guid,
+                    guid_candidates=guid_candidates,
+                    season=ep.parentIndex,
+                    episode=ep.index,
+                    recent_show_keys=recent_show_keys,
+                    recent_show_guids=recent_show_guids,
+                )
+                if not has_watched_show and not is_subscribed:
                     continue
+                if has_watched_show:
+                    current_app.logger.info(
+                        "Eligibility for %s on %s granted via watch history.",
+                        redacted_email,
+                        show_title or show_key_str or show_guid or "unknown show",
+                    )
+                else:
+                    current_app.logger.info(
+                        "Eligibility for %s on %s granted via %s.",
+                        redacted_email,
+                        show_title or show_key_str or show_guid or "unknown show",
+                        subscription_reason or "prior notification/subscription",
+                    )
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
@@ -2298,6 +2322,70 @@ def _user_has_subscription_fallback(
         )
         return True, [synthetic_preference]
     return False, []
+
+
+def _user_is_subscribed_for_show(
+    *,
+    email: str,
+    alternate_email: Optional[str],
+    show_key: Optional[str],
+    show_guid: Optional[str],
+    guid_candidates: Optional[List[str]],
+    season: Optional[int],
+    episode: Optional[int],
+    recent_show_keys: Set[str],
+    recent_show_guids: Set[str],
+) -> Tuple[bool, str]:
+    candidates = []
+    for candidate in [show_key, show_guid] + (guid_candidates or []):
+        if candidate:
+            candidate_str = str(candidate)
+            if candidate_str not in candidates:
+                candidates.append(candidate_str)
+
+    emails = [email]
+    if alternate_email and alternate_email not in emails:
+        emails.append(alternate_email)
+
+    if candidates:
+        preferences = (
+            UserPreferences.query
+            .filter(
+                UserPreferences.email.in_(emails),
+                or_(
+                    UserPreferences.show_key.in_(candidates),
+                    UserPreferences.show_guid.in_(candidates),
+                ),
+            )
+            .all()
+        )
+        active_preferences = [preference for preference in preferences if not preference.show_opt_out]
+        if active_preferences:
+            return True, "preference"
+
+    if any(candidate in recent_show_keys or candidate in recent_show_guids for candidate in candidates):
+        return True, "recent notification history"
+
+    if not candidates:
+        return False, ""
+
+    notifications = Notification.query.filter(
+        Notification.email.in_(emails),
+        or_(
+            Notification.show_guid.in_(candidates),
+            Notification.show_key.in_(candidates),
+        ),
+    )
+    if season is not None and episode is not None:
+        if notifications.filter(
+            Notification.season == season,
+            Notification.episode == episode,
+        ).first():
+            return True, "prior notification for episode"
+    if notifications.first():
+        return True, "prior notification for show"
+
+    return False, ""
 
 
 def _user_has_watched_show(
