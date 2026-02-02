@@ -10,7 +10,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from typing import List, Dict, Any, Set, Optional, Tuple
-from collections import Counter
 from logging.handlers import RotatingFileHandler
 from functools import lru_cache
 from cachetools import TTLCache
@@ -1570,9 +1569,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.warning("⚠️ No settings found; skipping.")
             return
 
-        processed_subscription_fallback_misses: Set[Tuple[str, str]] = set()
-        subscription_fallback_miss_counts: Counter[str] = Counter()
-
         interval = override_interval_minutes or s.notify_interval or 30
         cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
         now_dt = datetime.now(timezone.utc)
@@ -1763,51 +1759,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                has_watched_show, history_status = _user_has_watched_show(s, uid, show_key)
+                has_watched_show, _ = _user_has_watched_show(s, uid, show_key)
                 if not has_watched_show:
-                    if history_status in {"empty", "error"}:
-                        has_subscription, fallback_preferences = _user_has_subscription_fallback(
-                            canon,
-                            user_email,
-                            show_key_str,
-                            guid_candidates,
-                        )
-                        if has_subscription:
-                            current_app.logger.info(
-                                "Using subscription fallback for %s (%s) because Tautulli history was %s for %s.",
-                                show_title or "Unknown",
-                                show_key_str or (guid_candidates[0] if guid_candidates else "unknown"),
-                                history_status,
-                                redacted_email,
-                            )
-                            has_watched_show = True
-                            show_guid_update = guid_candidates[0] if guid_candidates else show_guid
-                            if show_guid_update or show_key_str:
-                                for preference in fallback_preferences:
-                                    if preference.show_opt_out:
-                                        continue
-                                    if show_key_str and preference.show_key != show_key_str:
-                                        preference.show_key = show_key_str
-                                        needs_commit = True
-                                    if show_guid_update and preference.show_guid != show_guid_update:
-                                        preference.show_guid = show_guid_update
-                                        needs_commit = True
-                        else:
-                            item_id = show_key_str or (guid_candidates[0] if guid_candidates else "unknown")
-                            dedup_key = (canon, item_id)
-                            if dedup_key not in processed_subscription_fallback_misses:
-                                subscription_fallback_miss_counts[show_title or item_id] += 1
-                                if current_app.logger.isEnabledFor(logging.DEBUG):
-                                    current_app.logger.debug(
-                                        "No subscription fallback found for %s (%s) after Tautulli history %s for %s.",
-                                        show_title or "Unknown",
-                                        item_id,
-                                        history_status,
-                                        redacted_email,
-                                    )
-                                processed_subscription_fallback_misses.add(dedup_key)
-                    if not has_watched_show:
-                        continue
+                    continue
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
@@ -1845,18 +1799,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             if watchable:
                 user_eps[user_email] = watchable
-
-        if subscription_fallback_miss_counts:
-            total_misses = sum(subscription_fallback_miss_counts.values())
-            top_misses = subscription_fallback_miss_counts.most_common(3)
-            top_summary = ", ".join(
-                f"{show} ({count})" for show, count in top_misses
-            )
-            current_app.logger.info(
-                "Subscription fallback misses this run: %s total. Top shows: %s.",
-                total_misses,
-                top_summary or "None",
-            )
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
