@@ -1008,11 +1008,25 @@ def reconcile_user_preferences(
                 if not unmatched_entries:
                     continue
                 if len(unmatched_entries) != len(empty_prefs):
+                    sample_limit = 5
+                    sample_entries = unmatched_entries[:sample_limit]
+                    sample_details = ""
+                    sample_details = ", ".join(
+                        (
+                            f"{entry.get('title') or 'Unknown Title'}"
+                            f" (key={entry.get('show_key') or 'n/a'}"
+                            f", guid={entry.get('show_guid') or 'n/a'})"
+                        )
+                        for entry in sample_entries
+                    )
+                    if sample_details:
+                        sample_details = f" Unmatched notification history entries (showing {len(sample_entries)}/{len(unmatched_entries)}): {sample_details}."
                     app.logger.info(
-                        "Preference reconciliation skipped %s empty opt-out rows for %s due to %s unmatched shows.",
+                        "Preference reconciliation skipped %s empty opt-out rows for %s due to %s unmatched shows.%s",
                         len(empty_prefs),
                         email,
                         len(unmatched_entries),
+                        sample_details,
                     )
                     continue
                 sorted_entries = sorted(
