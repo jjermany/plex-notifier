@@ -1637,19 +1637,26 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
                 added_at = _coerce_plex_timestamp(getattr(ep, "addedAt", None))
+                updated_at = _coerce_plex_timestamp(getattr(ep, "updatedAt", None))
+                candidate_first_seen = min(
+                    [dt for dt in (added_at, updated_at) if dt],
+                    default=None,
+                )
                 first_seen_at = None
                 if rating_key:
                     first_seen_at = existing_first_seen.get(rating_key)
                     if not first_seen_at:
-                        first_seen_at = added_at or now_dt
+                        first_seen_at = candidate_first_seen
+                        if not first_seen_at:
+                            first_seen_at = now_dt - timedelta(days=3650)
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
                                 episode_key=rating_key,
                                 first_seen_at=first_seen_at,
                             )
                         )
-                    elif added_at and added_at < first_seen_at:
-                        first_seen_at = added_at
+                    elif candidate_first_seen and candidate_first_seen < first_seen_at:
+                        first_seen_at = candidate_first_seen
                         existing_first_seen_rows[rating_key].first_seen_at = first_seen_at
                         updated_first_seen = True
                 current_app.logger.debug(
