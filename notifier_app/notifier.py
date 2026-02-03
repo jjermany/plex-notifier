@@ -195,6 +195,19 @@ def _coerce_plex_datetime(value: Optional[datetime]) -> Optional[datetime]:
     return value.astimezone(timezone.utc)
 
 
+def _coerce_plex_timestamp(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _coerce_plex_datetime(value)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
 def _notification_completeness_score(notification: Notification) -> int:
     identifiers = (
         notification.show_guid,
@@ -1599,6 +1612,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if isinstance(ep, Episode) and ep.ratingKey is not None
             ]
             existing_first_seen: Dict[str, datetime] = {}
+            existing_first_seen_rows: Dict[str, EpisodeFirstSeen] = {}
             if episode_keys:
                 first_seen_rows = (
                     EpisodeFirstSeen.query
@@ -1609,25 +1623,35 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     row.episode_key: _coerce_plex_datetime(row.first_seen_at)
                     for row in first_seen_rows
                 }
+                existing_first_seen_rows = {
+                    row.episode_key: row
+                    for row in first_seen_rows
+                }
 
             new_first_seen_rows: List[EpisodeFirstSeen] = []
+            updated_first_seen = False
             recent_eps: List[Episode] = []
             for ep in all_eps:
                 if not isinstance(ep, Episode):
                     continue
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
+                added_at = _coerce_plex_timestamp(getattr(ep, "addedAt", None))
                 first_seen_at = None
                 if rating_key:
                     first_seen_at = existing_first_seen.get(rating_key)
                     if not first_seen_at:
-                        first_seen_at = now_dt
+                        first_seen_at = added_at or now_dt
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
                                 episode_key=rating_key,
                                 first_seen_at=first_seen_at,
                             )
                         )
+                    elif added_at and added_at < first_seen_at:
+                        first_seen_at = added_at
+                        existing_first_seen_rows[rating_key].first_seen_at = first_seen_at
+                        updated_first_seen = True
                 current_app.logger.debug(
                     "Evaluating episode recency title=%s ratingKey=%s first_seen_at=%s",
                     getattr(ep, "title", None),
@@ -1637,9 +1661,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if first_seen_at is not None and first_seen_at >= cutoff_dt:
                     recent_eps.append(ep)
 
-            if new_first_seen_rows:
+            if new_first_seen_rows or updated_first_seen:
                 try:
-                    db.session.add_all(new_first_seen_rows)
+                    if new_first_seen_rows:
+                        db.session.add_all(new_first_seen_rows)
                     db.session.commit()
                 except Exception as exc:
                     current_app.logger.warning(
