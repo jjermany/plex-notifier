@@ -1795,12 +1795,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                         show_title or show_key_str or show_guid or "unknown show",
                     )
                 else:
-                    current_app.logger.info(
-                        "Eligibility for %s on %s granted via %s.",
-                        redacted_email,
-                        show_title or show_key_str or show_guid or "unknown show",
-                        subscription_reason or "prior notification/subscription",
-                    )
+                    if subscription_reason == "recent notification history":
+                        current_app.logger.debug(
+                            "Eligibility for %s granted via recent notification history.",
+                            redacted_email,
+                        )
+                    else:
+                        current_app.logger.info(
+                            "Eligibility for %s on %s granted via %s.",
+                            redacted_email,
+                            show_title or show_key_str or show_guid or "unknown show",
+                            subscription_reason or "prior notification/subscription",
+                        )
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
