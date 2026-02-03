@@ -314,14 +314,6 @@ def _select_notification_to_keep(
     return keep, reason
 
 
-def _get_episode_availability_datetime(episode: Episode) -> Optional[datetime]:
-    for attr in ("originallyAvailableAt", "availableAt"):
-        candidate = getattr(episode, attr, None)
-        if candidate:
-            return _coerce_plex_datetime(candidate)
-    return None
-
-
 def _extract_show_year_from_title(title: str | None) -> tuple[str | None, int | None]:
     if not title:
         return None, None
@@ -1619,17 +1611,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if not isinstance(ep, Episode):
                     continue
 
-                availability_dt = _get_episode_availability_datetime(ep)
-                availability_recent = availability_dt is not None and availability_dt >= cutoff_dt
-
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
                 first_seen_at = None
-                existing_first_seen_at = None
                 if rating_key:
-                    existing_first_seen_at = existing_first_seen.get(rating_key)
-                    if existing_first_seen_at:
-                        first_seen_at = existing_first_seen_at
-                    else:
+                    first_seen_at = existing_first_seen.get(rating_key)
+                    if not first_seen_at:
                         first_seen_at = now_dt
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
@@ -1637,13 +1623,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                 first_seen_at=first_seen_at,
                             )
                         )
-
-                first_seen_recent = (
-                    existing_first_seen_at is not None
-                    and first_seen_at is not None
-                    and first_seen_at >= cutoff_dt
+                current_app.logger.debug(
+                    "Evaluating episode recency title=%s ratingKey=%s first_seen_at=%s",
+                    getattr(ep, "title", None),
+                    rating_key,
+                    first_seen_at.isoformat() if first_seen_at else None,
                 )
-                if availability_recent or first_seen_recent:
+                if first_seen_at is not None and first_seen_at >= cutoff_dt:
                     recent_eps.append(ep)
 
             if new_first_seen_rows:
