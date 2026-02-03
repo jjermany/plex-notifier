@@ -1577,8 +1577,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             return
 
         interval = override_interval_minutes or s.notify_interval or 30
-        cutoff_dt = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(minutes=interval)
         now_dt = datetime.now(timezone.utc)
+        cutoff_dt = now_dt - timedelta(minutes=interval)
+        current_app.logger.debug(
+            "Manual run cutoff start computed as %s (interval=%s minutes)",
+            cutoff_dt.isoformat(),
+            interval,
+        )
 
         machine_id = None
 
