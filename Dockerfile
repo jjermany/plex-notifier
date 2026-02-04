@@ -21,6 +21,6 @@ ENV FLASK_ENV=production
 # Expose port
 EXPOSE 5000
 
-# Run the Flask app
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "notifier_app.webapp:create_app()", "--workers", "1", "--threads", "4"]
+# Run the Flask app (--log-level warning suppresses gunicorn startup INFO messages)
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "notifier_app.webapp:create_app()", "--workers", "1", "--threads", "4", "--log-level", "warning"]
 

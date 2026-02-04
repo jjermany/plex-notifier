@@ -1200,19 +1200,16 @@ def reconcile_user_preferences(
                 return
 
         app.logger.info(
-            "Preference reconciliation (%s) updated %s preferences across %s scanned shows "
-            "(matched=%s [fingerprint=%s, title_fallback=%s], unmatched=%s).",
+            "Pref reconcile (%s): %s updated, %s scanned (%s matched, %s unmatched).",
             run_reason,
             updated_count,
             scanned_count,
             matched_count,
-            fingerprint_match_count,
-            title_fallback_count,
             unmatched_count,
         )
         if guid_only_corrected or guid_only_unresolved:
             app.logger.info(
-                "Preference reconciliation (%s) resolved %s GUID-only preferences; %s remain unresolved.",
+                "Pref reconcile (%s): %s GUID-only resolved, %s unresolved.",
                 run_reason,
                 guid_only_corrected,
                 guid_only_unresolved,
@@ -1556,8 +1553,7 @@ def reconcile_notifications(
                 return
 
         app.logger.info(
-            "Notification reconciliation (%s) updated %s notifications with %s mismatches across %s scanned rows. "
-            "Repaired %s missing-identifier notifications; skipped %s.",
+            "Notif reconcile (%s): %s updated, %s mismatches, %s scanned, %s repaired, %s skipped.",
             run_reason,
             updated_count,
             mismatch_count,
