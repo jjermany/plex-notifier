@@ -11,7 +11,6 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from typing import List, Dict, Any, Set, Optional, Tuple
 from logging.handlers import RotatingFileHandler
-from functools import lru_cache
 from cachetools import TTLCache
 
 from .logging_utils import TZFormatter
@@ -2060,8 +2059,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
 
 def get_user_logger(email):
-    from logging.handlers import RotatingFileHandler
-
     safe_filename = email_to_filename(email)
     filename = f"{safe_filename}-notification.log"
 
