@@ -4,8 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="color-scheme" content="dark light">
-  <meta name="supported-color-schemes" content="dark light">
+  <!--
+    Gmail iOS Dark Mode Strategy:
+    We use "light" as primary to tell Gmail "don't auto-invert this email"
+    Combined with linear-gradient backgrounds (which Gmail doesn't modify)
+    and CSS blend modes for text, our dark colors persist correctly.
+  -->
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>New Episodes Available - Plex Notifier</title>
   <!--[if mso]>
   <style type="text/css">
@@ -14,9 +20,8 @@
   <![endif]-->
   <style type="text/css">
     :root {
-      /* Preserve dark styling in clients that auto-adjust colors */
-      color-scheme: dark;
-      supported-color-schemes: dark;
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
     }
 
     /* Reset styles */
@@ -25,13 +30,7 @@
       padding: 0;
       -webkit-text-size-adjust: 100%;
       -ms-text-size-adjust: 100%;
-      background-color: #1a1a1a !important;
     }
-
-    /* Force dark mode - prevent Gmail from inverting our already-dark email */
-    .darkmode-bg { background-color: #1a1a1a !important; }
-    [data-ogsc] .darkmode-bg { background-color: #1a1a1a !important; }
-    [data-ogsb] .darkmode-bg { background-color: #1a1a1a !important; }
 
     img {
       border: 0;
@@ -62,6 +61,24 @@
     a {
       color: #e5a00d;
       text-decoration: none;
+    }
+
+    /*
+     * Gmail iOS Dark Mode Fix using CSS Blend Modes
+     * Gmail inverts colors but doesn't touch background-image or blend modes.
+     * By using linear-gradient for backgrounds and nested blend modes for text,
+     * we counteract Gmail's automatic color inversion.
+     * Technique from: https://www.hteumeuleu.com/2021/fixing-gmail-dark-mode-css-blend-modes/
+     */
+
+    /* Gmail-specific blend mode selectors (u + .body targets Gmail) */
+    u + .body .gmail-blend-screen {
+      background: #000 !important;
+      mix-blend-mode: screen;
+    }
+    u + .body .gmail-blend-difference {
+      background: #000 !important;
+      mix-blend-mode: difference;
     }
 
     /* Mobile responsive styles */
@@ -128,13 +145,8 @@
       }
     }
 
-    /* Explicit dark mode support for clients that force theme changes */
+    /* Standard dark mode support for well-behaved clients */
     @media (prefers-color-scheme: dark) {
-      body,
-      .email-container {
-        background-color: #1a1a1a !important;
-      }
-
       .email-container h1,
       .email-container h2,
       .email-container h3 {
@@ -152,96 +164,11 @@
         color: #000000 !important;
       }
     }
-
-    /* Gmail iOS dark mode overrides - comprehensive targeting */
-    body[data-ogsc],
-    body[data-ogsb],
-    div[data-ogsc],
-    div[data-ogsb],
-    u + .email-body,
-    .email-body {
-      background-color: #1a1a1a !important;
-      color: #cccccc !important;
-    }
-
-    /* Target the outer wrapper table specifically */
-    body[data-ogsc] .outer-wrapper,
-    body[data-ogsb] .outer-wrapper,
-    [data-ogsc] .outer-wrapper,
-    [data-ogsb] .outer-wrapper,
-    u + .email-body .outer-wrapper,
-    .outer-wrapper {
-      background-color: #1a1a1a !important;
-    }
-
-    body[data-ogsc] .email-container,
-    body[data-ogsb] .email-container,
-    [data-ogsc] .email-container,
-    [data-ogsb] .email-container,
-    u + .email-body .email-container {
-      background-color: #1a1a1a !important;
-    }
-
-    body[data-ogsc] .email-container h1,
-    body[data-ogsc] .email-container h2,
-    body[data-ogsc] .email-container h3,
-    body[data-ogsb] .email-container h1,
-    body[data-ogsb] .email-container h2,
-    body[data-ogsb] .email-container h3,
-    [data-ogsc] h1, [data-ogsc] h2, [data-ogsc] h3,
-    [data-ogsb] h1, [data-ogsb] h2, [data-ogsb] h3,
-    u + .email-body .email-container h1,
-    u + .email-body .email-container h2,
-    u + .email-body .email-container h3 {
-      color: #ffffff !important;
-    }
-
-    body[data-ogsc] .email-container p,
-    body[data-ogsb] .email-container p,
-    [data-ogsc] p, [data-ogsb] p,
-    u + .email-body .email-container p {
-      color: #cccccc !important;
-    }
-
-    body[data-ogsc] .email-container a,
-    body[data-ogsb] .email-container a,
-    [data-ogsc] a, [data-ogsb] a,
-    u + .email-body .email-container a {
-      color: #e5a00d !important;
-    }
-
-    /* Card backgrounds - prevent inversion */
-    body[data-ogsc] .show-card,
-    body[data-ogsb] .show-card,
-    [data-ogsc] .show-card,
-    [data-ogsb] .show-card {
-      background-color: #212529 !important;
-    }
-
-    body[data-ogsc] .episode-card,
-    body[data-ogsb] .episode-card,
-    [data-ogsc] .episode-card,
-    [data-ogsb] .episode-card {
-      background-color: rgba(0, 0, 0, 0.25) !important;
-    }
-
-    /* CTA button - ensure it stays gold */
-    body[data-ogsc] .cta-button,
-    body[data-ogsb] .cta-button,
-    [data-ogsc] .cta-button,
-    [data-ogsb] .cta-button,
-    body[data-ogsc] .cta-button td,
-    body[data-ogsb] .cta-button td,
-    body[data-ogsc] .cta-button a,
-    body[data-ogsb] .cta-button a {
-      background-color: #e5a00d !important;
-      color: #000000 !important;
-    }
   </style>
 </head>
-<body class="email-body darkmode-bg" data-color-scheme="dark" style="margin:0; padding:0; background-color:#1a1a1a; color:#cccccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<body class="body" style="margin:0; padding:0; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a); color:#cccccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
   <!--[if !mso]><!-->
-  <div class="darkmode-bg" style="background-color:#1a1a1a !important;">
+  <div style="background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
   <!--<![endif]-->
   <!-- Preheader text -->
   <div style="display:none; font-size:1px; color:#1a1a1a; line-height:1px; max-height:0px; max-width:0px; opacity:0; overflow:hidden;">
@@ -250,16 +177,16 @@
   </div>
 
   <!-- Main wrapper -->
-  <table class="outer-wrapper darkmode-bg" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="background-color:#1a1a1a;">
+  <table class="outer-wrapper" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
     <tr>
-      <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:24px 10px; background-color:#1a1a1a;">
+      <td align="center" bgcolor="#1a1a1a" style="padding:24px 10px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
 
         <!-- Email container -->
-        <table class="email-container darkmode-bg" width="600" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="max-width:600px; width:100%; background-color:#1a1a1a;">
+        <table class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="max-width:600px; width:100%; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
 
           <!-- Header -->
           <tr>
-            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:32px 24px 24px; background-color:#1a1a1a;">
+            <td align="center" bgcolor="#1a1a1a" style="padding:32px 24px 24px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
               <img src="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png"
                    alt="Plex Notifier Logo"
                    class="header-logo"
@@ -269,12 +196,12 @@
 
           <!-- Title -->
           <tr>
-            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a;">
+            <td align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
               <h1 class="mobile-h1" style="margin:0; font-size:32px; font-weight:700; color:#ffffff; line-height:1.2; letter-spacing:-0.5px;">
-                New Episodes Available
+                <div class="gmail-blend-screen"><div class="gmail-blend-difference">New Episodes Available</div></div>
               </h1>
               <p class="mobile-body" style="margin:16px 0 0; font-size:16px; color:#cccccc; line-height:1.5;">
-                Fresh content is waiting for you on Plex
+                <div class="gmail-blend-screen"><div class="gmail-blend-difference">Fresh content is waiting for you on Plex</div></div>
               </p>
             </td>
           </tr>
@@ -287,7 +214,7 @@
               <table class="show-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
                      bgcolor="#212529"
                      style="background-color:#212529;
-                            background: linear-gradient(135deg, #212529 0%, #2a2e32 100%);
+                            background-image: linear-gradient(135deg, #212529 0%, #2a2e32 100%);
                             border-radius:12px;
                             border:1px solid rgba(255, 255, 255, 0.1);
                             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);">
@@ -342,7 +269,8 @@
                           <!-- Episode Card -->
                           <table class="episode-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
                                  bgcolor="#1a1a1a"
-                                 style="background-color:rgba(0, 0, 0, 0.25);
+                                 style="background-color:#1a1a1a;
+                                        background-image:linear-gradient(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.25));
                                         border-radius:8px;
                                         border-left:4px solid #e5a00d;
                                         border-top:1px solid rgba(255, 255, 255, 0.05);
@@ -396,7 +324,7 @@
 
           <!-- Divider -->
           <tr>
-            <td class="darkmode-bg" bgcolor="#1a1a1a" style="padding:24px 40px; background-color:#1a1a1a;">
+            <td bgcolor="#1a1a1a" style="padding:24px 40px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
               <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
                   <td style="border-top:1px solid rgba(229, 160, 13, 0.2);"></td>
@@ -407,7 +335,7 @@
 
           <!-- Footer / Preferences -->
           <tr>
-            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:24px 24px 40px; background-color:#1a1a1a;">
+            <td align="center" bgcolor="#1a1a1a" style="padding:24px 24px 40px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
               <table cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
                   <td align="center" style="padding-bottom:16px;">
@@ -421,11 +349,12 @@
                     <!-- Button with better fallback for email clients -->
                     <table cellpadding="0" cellspacing="0" border="0" role="presentation" class="cta-button">
                       <tr>
-                        <td align="center" style="border-radius:8px; background-color:#e5a00d;">
+                        <td align="center" style="border-radius:8px; background-color:#e5a00d; background-image:linear-gradient(#e5a00d,#e5a00d);">
                           <a href="{{ base_url }}/subscriptions?token={{ token }}"
                              style="display:inline-block;
                                     padding:16px 32px;
                                     background-color:#e5a00d;
+                                    background-image:linear-gradient(#e5a00d,#e5a00d);
                                     color:#000000;
                                     text-decoration:none;
                                     font-weight:600;
@@ -453,7 +382,7 @@
 
           <!-- Footer branding -->
           <tr>
-            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a;">
+            <td align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a; background-image:linear-gradient(#1a1a1a,#1a1a1a);">
               <p style="margin:0; font-size:13px; color:#666666; line-height:1.5;">
                 Powered by <strong style="color:#e5a00d;">Plex Notifier</strong>
               </p>
