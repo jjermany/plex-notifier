@@ -1651,7 +1651,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     rating_key,
                     first_seen_at.isoformat() if first_seen_at else None,
                 )
-                if first_seen_at is not None and first_seen_at >= cutoff_dt:
+                # For manual runs (override_interval_minutes set), include all episodes
+                # regardless of first_seen_at. The deduplication check downstream will
+                # prevent re-notifying about episodes users have already been notified about.
+                # For scheduled runs, filter by first_seen_at to only include recent episodes.
+                if override_interval_minutes is not None:
+                    recent_eps.append(ep)
+                elif first_seen_at is not None and first_seen_at >= cutoff_dt:
                     recent_eps.append(ep)
 
             if new_first_seen_rows:
@@ -1664,8 +1670,11 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                         exc,
                     )
                     db.session.rollback()
-            local_time = cutoff_dt.astimezone()
-            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
+            if override_interval_minutes is not None:
+                current_app.logger.info(f"📺 Manual run: considering all {len(recent_eps)} episodes for notification")
+            else:
+                local_time = cutoff_dt.astimezone()
+                current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
 
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
