@@ -61,9 +61,27 @@ def requires_auth(f):
 
     return decorated
 
+def _parse_log_level(env_value: str, default: int = logging.INFO) -> int:
+    """Parse LOG_LEVEL environment variable to logging level constant."""
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    return level_map.get(env_value.upper(), default)
+
+
 def create_app():
     log_format = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
-    level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
+    # LOG_LEVEL takes precedence; fall back to DEBUG env var for backwards compatibility
+    log_level_env = os.getenv("LOG_LEVEL", "").strip()
+    if log_level_env:
+        level = _parse_log_level(log_level_env)
+    else:
+        level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
     handler = logging.StreamHandler()
     handler.setFormatter(TZFormatter(log_format))
     logging.basicConfig(level=level, handlers=[handler])
