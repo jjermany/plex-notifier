@@ -579,3 +579,45 @@ body.auth-page::before {
 .hover-lift:hover {
   transform: translateY(-4px);
 }
+
+/* ========== Log Level Highlighting ========== */
+.log-line {
+  display: block;
+  padding: 2px 0;
+  border-radius: 2px;
+}
+
+.log-error {
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
+  padding: 2px 4px;
+}
+
+.log-warning {
+  color: #feca57;
+  background-color: rgba(254, 202, 87, 0.08);
+}
+
+.log-info {
+  color: #f3f3f3;
+}
+
+.log-debug {
+  color: #a0a0a0;
+  font-style: italic;
+}
+
+/* Enhanced log viewer styling */
+.log-viewer {
+  max-height: 450px;
+}
+
+.log-output {
+  max-height: 410px;
+}
+
+/* Log stats styling */
+.log-stats {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+}

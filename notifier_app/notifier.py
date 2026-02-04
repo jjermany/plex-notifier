@@ -1733,6 +1733,7 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 continue
 
             watchable: List[Dict[str, Any]] = []
+            eligibility_summary: Dict[str, List[str]] = {}  # reason -> list of show titles
             recent_notified = _get_recent_notifications(canon)
             recent_show_keys: Set[str] = set()
             recent_show_guids: Set[str] = set()
@@ -1819,25 +1820,16 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 )
                 if not has_watched_show and not is_subscribed:
                     continue
+                # Collect eligibility for summary instead of individual logging
+                display_title = show_title or show_key_str or show_guid or "unknown show"
                 if has_watched_show:
-                    current_app.logger.info(
-                        "Eligibility for %s on %s granted via watch history.",
-                        redacted_email,
-                        show_title or show_key_str or show_guid or "unknown show",
-                    )
+                    reason = "watch history"
                 else:
-                    if subscription_reason == "recent notification history":
-                        current_app.logger.debug(
-                            "Eligibility for %s granted via recent notification history.",
-                            redacted_email,
-                        )
-                    else:
-                        current_app.logger.info(
-                            "Eligibility for %s on %s granted via %s.",
-                            redacted_email,
-                            show_title or show_key_str or show_guid or "unknown show",
-                            subscription_reason or "prior notification/subscription",
-                        )
+                    reason = subscription_reason or "prior notification"
+                if reason not in eligibility_summary:
+                    eligibility_summary[reason] = []
+                if display_title not in eligibility_summary[reason]:
+                    eligibility_summary[reason].append(display_title)
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
@@ -1875,6 +1867,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
             if watchable:
                 user_eps[user_email] = watchable
+                # Log consolidated eligibility summary
+                if eligibility_summary:
+                    summary_parts = []
+                    for reason, shows in eligibility_summary.items():
+                        summary_parts.append(f"{len(shows)} via {reason}")
+                    current_app.logger.info(
+                        "📋 %s eligible: %s show(s) (%s)",
+                        redacted_email,
+                        len(watchable),
+                        ", ".join(summary_parts),
+                    )
 
         if not user_eps:
             current_app.logger.info("⚠️ No users with watchable episodes.")
