@@ -584,7 +584,7 @@ def _resolve_show_match(
     if force_title_fallback and title:
         matched_show = _search_show_by_title(app, tv_section, title, year)
         if matched_show:
-            app.logger.info(
+            app.logger.debug(
                 "%s reconciliation recovered show via title fallback for %s: '%s'%s.",
                 record_type,
                 record_id if record_id is not None else "unknown",
@@ -1055,6 +1055,10 @@ def reconcile_user_preferences(
         pending_updates = 0
         guid_only_corrected = 0
         guid_only_unresolved = 0
+        matched_count = 0
+        unmatched_count = 0
+        fingerprint_match_count = 0
+        title_fallback_count = 0
         batch_size = 50
 
         for group in show_groups.values():
@@ -1092,7 +1096,8 @@ def reconcile_user_preferences(
             )
 
             if not matched_show:
-                app.logger.info(
+                unmatched_count += 1
+                app.logger.debug(
                     "Preference reconciliation match summary: show_key=%s, show_guid=%s, title=%s, year=%s, matched=no, detail=%s.",
                     show_key or "None",
                     show_guid or "None",
@@ -1101,14 +1106,19 @@ def reconcile_user_preferences(
                     match_detail,
                 )
                 for pref, stored_guid in guid_only_prefs:
-                    app.logger.info(
+                    app.logger.debug(
                         "Preference reconciliation unable to resolve GUID-only preference %s (%s).",
                         pref.id if pref.id is not None else "unknown",
                         stored_guid,
                     )
                     guid_only_unresolved += 1
                 continue
-            app.logger.info(
+            matched_count += 1
+            if match_detail == "fingerprint_match":
+                fingerprint_match_count += 1
+            elif match_detail == "title_fallback_match":
+                title_fallback_count += 1
+            app.logger.debug(
                 "Preference reconciliation match summary: show_key=%s, show_guid=%s, title=%s, year=%s, matched=yes, detail=%s.",
                 show_key or "None",
                 show_guid or "None",
@@ -1137,7 +1147,7 @@ def reconcile_user_preferences(
                 pending_updates += 1
 
             for pref, stored_guid in guid_only_prefs:
-                app.logger.info(
+                app.logger.debug(
                     "Preference reconciliation corrected GUID-only preference %s: %s -> %s (key %s).",
                     pref.id if pref.id is not None else "unknown",
                     stored_guid,
@@ -1190,17 +1200,23 @@ def reconcile_user_preferences(
                 return
 
         app.logger.info(
-            "Preference reconciliation (%s) updated %s preferences across %s scanned shows.",
+            "Preference reconciliation (%s) updated %s preferences across %s scanned shows "
+            "(matched=%s [fingerprint=%s, title_fallback=%s], unmatched=%s).",
             run_reason,
             updated_count,
             scanned_count,
+            matched_count,
+            fingerprint_match_count,
+            title_fallback_count,
+            unmatched_count,
         )
-        app.logger.info(
-            "Preference reconciliation (%s) resolved %s GUID-only preferences; %s remain unresolved.",
-            run_reason,
-            guid_only_corrected,
-            guid_only_unresolved,
-        )
+        if guid_only_corrected or guid_only_unresolved:
+            app.logger.info(
+                "Preference reconciliation (%s) resolved %s GUID-only preferences; %s remain unresolved.",
+                run_reason,
+                guid_only_corrected,
+                guid_only_unresolved,
+            )
 
 
 def reconcile_notifications(
