@@ -1630,6 +1630,15 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     continue
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
+
+                # Get Plex metadata timestamps for manual run filtering
+                added_at = _coerce_plex_timestamp(getattr(ep, "addedAt", None))
+                updated_at = _coerce_plex_timestamp(getattr(ep, "updatedAt", None))
+                plex_added_dt = min(
+                    [dt for dt in (added_at, updated_at) if dt],
+                    default=None,
+                )
+
                 first_seen_at = None
                 if rating_key:
                     first_seen_at = existing_first_seen.get(rating_key)
@@ -1645,13 +1654,25 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                                 first_seen_at=first_seen_at,
                             )
                         )
-                current_app.logger.debug(
-                    "Evaluating episode recency title=%s ratingKey=%s first_seen_at=%s",
-                    getattr(ep, "title", None),
-                    rating_key,
-                    first_seen_at.isoformat() if first_seen_at else None,
-                )
-                if first_seen_at is not None and first_seen_at >= cutoff_dt:
+
+                # For manual runs, filter by Plex's addedAt/updatedAt metadata (when
+                # the episode was actually added to Plex). For scheduled runs, filter
+                # by first_seen_at (when our system first discovered the episode).
+                if override_interval_minutes is not None:
+                    filter_dt = plex_added_dt
+                    filter_label = "plex_added"
+                else:
+                    filter_dt = first_seen_at
+                    filter_label = "first_seen_at"
+
+                if filter_dt is not None and filter_dt >= cutoff_dt:
+                    current_app.logger.debug(
+                        "Episode meets cutoff title=%s ratingKey=%s %s=%s",
+                        getattr(ep, "title", None),
+                        rating_key,
+                        filter_label,
+                        filter_dt.isoformat(),
+                    )
                     recent_eps.append(ep)
 
             if new_first_seen_rows:
@@ -1665,7 +1686,10 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     )
                     db.session.rollback()
             local_time = cutoff_dt.astimezone()
-            current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
+            if override_interval_minutes is not None:
+                current_app.logger.info(f"📺 Manual run: {len(recent_eps)} episodes added to Plex since {local_time.isoformat()}")
+            else:
+                current_app.logger.info(f"📺 Filtered {len(recent_eps)} recent episodes since {local_time.isoformat()}")
 
         except Exception as e:
             current_app.logger.error(f"Error connecting to Plex: {e}")
