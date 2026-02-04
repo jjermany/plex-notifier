@@ -14,11 +14,14 @@ from .config import db, Settings, UserPreferences, Notification, ShowIdentity
 from .utils import normalize_email, normalize_show_identity
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
 from .constants import (
-    DEFAULT_HISTORY_LIMIT,
     HISTORY_ENTRIES_PER_PAGE,
     MONTHLY_STATS_MONTHS,
     SUBSCRIPTIONS_SHOWS_PER_PAGE,
     INACTIVE_SHOW_THRESHOLD_DAYS,
+    RATE_LIMIT_TEST_EMAIL,
+    RATE_LIMIT_MANUAL_CHECK,
+    APP_LOG_MAX_BYTES,
+    LOG_BACKUP_COUNT,
 )
 from .notifier import (
     start_scheduler,
@@ -34,12 +37,6 @@ from .notifier import (
     _select_notification_to_keep,
 )
 from .logging_utils import TZFormatter
-from .constants import (
-    RATE_LIMIT_TEST_EMAIL,
-    RATE_LIMIT_MANUAL_CHECK,
-    APP_LOG_MAX_BYTES,
-    LOG_BACKUP_COUNT,
-)
 from sqlalchemy import inspect, text, or_
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
