@@ -83,15 +83,16 @@ def create_app():
     else:
         level = logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
     handler = logging.StreamHandler()
+    handler.setLevel(level)
     handler.setFormatter(TZFormatter(log_format))
-    logging.basicConfig(level=level, handlers=[handler])
+    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
 
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
     app = Flask(__name__, instance_relative_config=True)
-    app.logger.setLevel(logging.DEBUG)
+    app.logger.setLevel(level)
     log_dir = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs"))
     os.makedirs(log_dir, exist_ok=True)
     app_log_path = os.path.join(log_dir, "app.log")
