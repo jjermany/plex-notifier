@@ -15,8 +15,8 @@
   <style type="text/css">
     :root {
       /* Preserve dark styling in clients that auto-adjust colors */
-      color-scheme: dark light;
-      supported-color-schemes: dark light;
+      color-scheme: dark;
+      supported-color-schemes: dark;
     }
 
     /* Reset styles */
@@ -25,7 +25,13 @@
       padding: 0;
       -webkit-text-size-adjust: 100%;
       -ms-text-size-adjust: 100%;
+      background-color: #1a1a1a !important;
     }
+
+    /* Force dark mode - prevent Gmail from inverting our already-dark email */
+    .darkmode-bg { background-color: #1a1a1a !important; }
+    [data-ogsc] .darkmode-bg { background-color: #1a1a1a !important; }
+    [data-ogsb] .darkmode-bg { background-color: #1a1a1a !important; }
 
     img {
       border: 0;
@@ -147,16 +153,31 @@
       }
     }
 
-    /* Gmail iOS dark mode overrides */
+    /* Gmail iOS dark mode overrides - comprehensive targeting */
     body[data-ogsc],
     body[data-ogsb],
-    u + .email-body {
+    div[data-ogsc],
+    div[data-ogsb],
+    u + .email-body,
+    .email-body {
       background-color: #1a1a1a !important;
       color: #cccccc !important;
     }
 
+    /* Target the outer wrapper table specifically */
+    body[data-ogsc] .outer-wrapper,
+    body[data-ogsb] .outer-wrapper,
+    [data-ogsc] .outer-wrapper,
+    [data-ogsb] .outer-wrapper,
+    u + .email-body .outer-wrapper,
+    .outer-wrapper {
+      background-color: #1a1a1a !important;
+    }
+
     body[data-ogsc] .email-container,
     body[data-ogsb] .email-container,
+    [data-ogsc] .email-container,
+    [data-ogsb] .email-container,
     u + .email-body .email-container {
       background-color: #1a1a1a !important;
     }
@@ -167,6 +188,8 @@
     body[data-ogsb] .email-container h1,
     body[data-ogsb] .email-container h2,
     body[data-ogsb] .email-container h3,
+    [data-ogsc] h1, [data-ogsc] h2, [data-ogsc] h3,
+    [data-ogsb] h1, [data-ogsb] h2, [data-ogsb] h3,
     u + .email-body .email-container h1,
     u + .email-body .email-container h2,
     u + .email-body .email-container h3 {
@@ -175,18 +198,51 @@
 
     body[data-ogsc] .email-container p,
     body[data-ogsb] .email-container p,
+    [data-ogsc] p, [data-ogsb] p,
     u + .email-body .email-container p {
       color: #cccccc !important;
     }
 
     body[data-ogsc] .email-container a,
     body[data-ogsb] .email-container a,
+    [data-ogsc] a, [data-ogsb] a,
     u + .email-body .email-container a {
       color: #e5a00d !important;
     }
+
+    /* Card backgrounds - prevent inversion */
+    body[data-ogsc] .show-card,
+    body[data-ogsb] .show-card,
+    [data-ogsc] .show-card,
+    [data-ogsb] .show-card {
+      background-color: #212529 !important;
+    }
+
+    body[data-ogsc] .episode-card,
+    body[data-ogsb] .episode-card,
+    [data-ogsc] .episode-card,
+    [data-ogsb] .episode-card {
+      background-color: rgba(0, 0, 0, 0.25) !important;
+    }
+
+    /* CTA button - ensure it stays gold */
+    body[data-ogsc] .cta-button,
+    body[data-ogsb] .cta-button,
+    [data-ogsc] .cta-button,
+    [data-ogsb] .cta-button,
+    body[data-ogsc] .cta-button td,
+    body[data-ogsb] .cta-button td,
+    body[data-ogsc] .cta-button a,
+    body[data-ogsb] .cta-button a {
+      background-color: #e5a00d !important;
+      color: #000000 !important;
+    }
   </style>
 </head>
-<body class="email-body" style="margin:0; padding:0; background-color:#1a1a1a; color:#cccccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+<body class="email-body darkmode-bg" data-color-scheme="dark" style="margin:0; padding:0; background-color:#1a1a1a; color:#cccccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+  <!--[if !mso]><!-->
+  <div class="darkmode-bg" style="background-color:#1a1a1a !important;">
+  <!--<![endif]-->
   <!-- Preheader text -->
   <div style="display:none; font-size:1px; color:#1a1a1a; line-height:1px; max-height:0px; max-width:0px; opacity:0; overflow:hidden;">
     {% set total_episodes = grouped_episodes.values() | map(attribute='episodes') | map('length') | sum %}
@@ -194,16 +250,16 @@
   </div>
 
   <!-- Main wrapper -->
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background-color:#1a1a1a;">
+  <table class="outer-wrapper darkmode-bg" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="background-color:#1a1a1a;">
     <tr>
-      <td align="center" style="padding:24px 10px;">
+      <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:24px 10px; background-color:#1a1a1a;">
 
         <!-- Email container -->
-        <table class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" role="presentation" style="max-width:600px; width:100%;">
+        <table class="email-container darkmode-bg" width="600" cellpadding="0" cellspacing="0" border="0" role="presentation" bgcolor="#1a1a1a" style="max-width:600px; width:100%; background-color:#1a1a1a;">
 
           <!-- Header -->
           <tr>
-            <td align="center" style="padding:32px 24px 24px;">
+            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:32px 24px 24px; background-color:#1a1a1a;">
               <img src="https://github.com/jjermany/plex-notifier/raw/main/media/logo.png"
                    alt="Plex Notifier Logo"
                    class="header-logo"
@@ -213,7 +269,7 @@
 
           <!-- Title -->
           <tr>
-            <td align="center" style="padding:0 24px 32px;">
+            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a;">
               <h1 class="mobile-h1" style="margin:0; font-size:32px; font-weight:700; color:#ffffff; line-height:1.2; letter-spacing:-0.5px;">
                 New Episodes Available
               </h1>
@@ -228,7 +284,8 @@
           <tr>
             <td style="padding:0 16px 32px;">
               <!-- Show Card -->
-              <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
+              <table class="show-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
+                     bgcolor="#212529"
                      style="background-color:#212529;
                             background: linear-gradient(135deg, #212529 0%, #2a2e32 100%);
                             border-radius:12px;
@@ -283,7 +340,8 @@
                       <tr>
                         <td style="padding:{% if not loop.first %}16px{% else %}0{% endif %} 0 0;">
                           <!-- Episode Card -->
-                          <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
+                          <table class="episode-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"
+                                 bgcolor="#1a1a1a"
                                  style="background-color:rgba(0, 0, 0, 0.25);
                                         border-radius:8px;
                                         border-left:4px solid #e5a00d;
@@ -338,7 +396,7 @@
 
           <!-- Divider -->
           <tr>
-            <td style="padding:24px 40px;">
+            <td class="darkmode-bg" bgcolor="#1a1a1a" style="padding:24px 40px; background-color:#1a1a1a;">
               <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
                   <td style="border-top:1px solid rgba(229, 160, 13, 0.2);"></td>
@@ -349,7 +407,7 @@
 
           <!-- Footer / Preferences -->
           <tr>
-            <td align="center" style="padding:24px 24px 40px;">
+            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:24px 24px 40px; background-color:#1a1a1a;">
               <table cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr>
                   <td align="center" style="padding-bottom:16px;">
@@ -395,7 +453,7 @@
 
           <!-- Footer branding -->
           <tr>
-            <td align="center" style="padding:0 24px 32px;">
+            <td class="darkmode-bg" align="center" bgcolor="#1a1a1a" style="padding:0 24px 32px; background-color:#1a1a1a;">
               <p style="margin:0; font-size:13px; color:#666666; line-height:1.5;">
                 Powered by <strong style="color:#e5a00d;">Plex Notifier</strong>
               </p>
@@ -407,5 +465,8 @@
       </td>
     </tr>
   </table>
+  <!--[if !mso]><!-->
+  </div>
+  <!--<![endif]-->
 </body>
 </html>
