@@ -1612,7 +1612,6 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if isinstance(ep, Episode) and ep.ratingKey is not None
             ]
             existing_first_seen: Dict[str, datetime] = {}
-            existing_first_seen_rows: Dict[str, EpisodeFirstSeen] = {}
             if episode_keys:
                 first_seen_rows = (
                     EpisodeFirstSeen.query
@@ -1623,42 +1622,29 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     row.episode_key: _coerce_plex_datetime(row.first_seen_at)
                     for row in first_seen_rows
                 }
-                existing_first_seen_rows = {
-                    row.episode_key: row
-                    for row in first_seen_rows
-                }
 
             new_first_seen_rows: List[EpisodeFirstSeen] = []
-            updated_first_seen = False
             recent_eps: List[Episode] = []
             for ep in all_eps:
                 if not isinstance(ep, Episode):
                     continue
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
-                added_at = _coerce_plex_timestamp(getattr(ep, "addedAt", None))
-                updated_at = _coerce_plex_timestamp(getattr(ep, "updatedAt", None))
-                candidate_first_seen = min(
-                    [dt for dt in (added_at, updated_at) if dt],
-                    default=None,
-                )
                 first_seen_at = None
                 if rating_key:
                     first_seen_at = existing_first_seen.get(rating_key)
                     if not first_seen_at:
-                        first_seen_at = candidate_first_seen
-                        if not first_seen_at:
-                            first_seen_at = now_dt - timedelta(days=3650)
+                        # Use current time when the notification system first discovers
+                        # an episode, not Plex's addedAt/updatedAt metadata. This ensures
+                        # episodes are considered "new" when first detected by our system,
+                        # regardless of when they were originally added to Plex.
+                        first_seen_at = now_dt
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
                                 episode_key=rating_key,
                                 first_seen_at=first_seen_at,
                             )
                         )
-                    elif candidate_first_seen and candidate_first_seen < first_seen_at:
-                        first_seen_at = candidate_first_seen
-                        existing_first_seen_rows[rating_key].first_seen_at = first_seen_at
-                        updated_first_seen = True
                 current_app.logger.debug(
                     "Evaluating episode recency title=%s ratingKey=%s first_seen_at=%s",
                     getattr(ep, "title", None),
@@ -1668,10 +1654,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if first_seen_at is not None and first_seen_at >= cutoff_dt:
                     recent_eps.append(ep)
 
-            if new_first_seen_rows or updated_first_seen:
+            if new_first_seen_rows:
                 try:
-                    if new_first_seen_rows:
-                        db.session.add_all(new_first_seen_rows)
+                    db.session.add_all(new_first_seen_rows)
                     db.session.commit()
                 except Exception as exc:
                     current_app.logger.warning(
