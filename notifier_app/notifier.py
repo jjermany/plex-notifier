@@ -1665,15 +1665,14 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     filter_dt = first_seen_at
                     filter_label = "first_seen_at"
 
-                current_app.logger.debug(
-                    "Evaluating episode recency title=%s ratingKey=%s %s=%s",
-                    getattr(ep, "title", None),
-                    rating_key,
-                    filter_label,
-                    filter_dt.isoformat() if filter_dt else None,
-                )
-
                 if filter_dt is not None and filter_dt >= cutoff_dt:
+                    current_app.logger.debug(
+                        "Episode meets cutoff title=%s ratingKey=%s %s=%s",
+                        getattr(ep, "title", None),
+                        rating_key,
+                        filter_label,
+                        filter_dt.isoformat(),
+                    )
                     recent_eps.append(ep)
 
             if new_first_seen_rows:
