@@ -75,11 +75,23 @@
 
     <div class="card mb-4" id="log-viewer-card">
       <div class="card-header d-flex align-items-center justify-content-between">
-        <span><i class="bi bi-terminal-fill"></i> Live App Logs</span>
+        <span><i class="bi bi-terminal-fill"></i> Live Logs</span>
         <span class="badge bg-warning" id="logStatusBadge">Connecting</span>
       </div>
       <div class="card-body">
         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+          <select class="form-select form-select-sm" id="logFileSelect" style="width: auto;">
+            <option value="app">Application Log</option>
+            <option value="notifications">Notifications Log</option>
+          </select>
+          <select class="form-select form-select-sm" id="logLevelFilter" style="width: auto;">
+            <option value="">All Levels</option>
+            <option value="ERROR">Errors Only</option>
+            <option value="WARNING">Warnings+</option>
+            <option value="INFO">Info+</option>
+          </select>
+          <input type="text" class="form-control form-control-sm" id="logSearchFilter"
+                 placeholder="Search logs..." style="width: 150px;">
           <button type="button" class="btn btn-outline-light btn-sm" id="logStartBtn">
             <i class="bi bi-play-fill"></i> Start
           </button>
@@ -97,8 +109,11 @@
         <div class="log-viewer">
           <pre id="logOutput" class="log-output" aria-live="polite"></pre>
         </div>
-        <div class="form-text text-light mt-2">
-          <i class="bi bi-info-circle"></i> Streaming the server application log (admin-only).
+        <div class="d-flex justify-content-between align-items-center mt-2">
+          <div class="form-text text-light">
+            <i class="bi bi-info-circle"></i> Streaming server logs (admin-only).
+          </div>
+          <div class="log-stats small text-muted" id="logStats"></div>
         </div>
       </div>
     </div>

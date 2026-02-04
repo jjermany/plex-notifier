@@ -1079,7 +1079,15 @@ def create_app():
     @limiter.limit("3600 per hour")
     @requires_auth
     def admin_logs():
-        log_path = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs", "app.log"))
+        # Support multiple log files
+        log_file_param = request.args.get("file", "app")
+        allowed_files = {
+            "app": "app.log",
+            "notifications": "notifications.log",
+        }
+        log_filename = allowed_files.get(log_file_param, "app.log")
+        log_path = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs", log_filename))
+
         try:
             offset_arg = request.args.get("offset", "0")
             start_arg = request.args.get("start")
@@ -1097,10 +1105,11 @@ def create_app():
 
         if not os.path.exists(log_path):
             return jsonify({
-                "lines": ["Log file not available yet."],
+                "lines": [f"{log_filename} not available yet."],
                 "offset": 0,
                 "file_size": 0,
                 "ends_with_newline": True,
+                "log_file": log_file_param,
             })
 
         file_size = os.path.getsize(log_path)
@@ -1122,6 +1131,7 @@ def create_app():
             "offset": new_offset,
             "file_size": file_size,
             "ends_with_newline": ends_with_newline,
+            "log_file": log_file_param,
         })
 
     @app.route('/')

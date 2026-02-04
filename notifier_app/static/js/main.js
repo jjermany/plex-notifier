@@ -329,63 +329,147 @@ function initLogViewer() {
   const clearBtn = document.getElementById('logClearBtn');
   const statusBadge = document.getElementById('logStatusBadge');
   const autoScrollToggle = document.getElementById('logAutoScroll');
+  const logFileSelect = document.getElementById('logFileSelect');
+  const logLevelFilter = document.getElementById('logLevelFilter');
+  const logSearchFilter = document.getElementById('logSearchFilter');
+  const logStats = document.getElementById('logStats');
+
   const POLL_INTERVAL_MS = 2000;
   const MAX_LINES = 500;
   let offset = 0;
   let pollTimer = null;
   let pendingLine = '';
   let firstFetch = true;
+  let currentLogFile = logFileSelect?.value || 'app';
+  let allLines = []; // Store all fetched lines for filtering
+  let stats = { total: 0, errors: 0, warnings: 0 };
+
+  const LOG_LEVEL_PRIORITY = { 'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3 };
 
   const setStatus = (state, text) => {
     if (!statusBadge) return;
     statusBadge.textContent = text;
-    statusBadge.classList.remove('bg-success', 'bg-warning', 'bg-secondary');
+    statusBadge.classList.remove('bg-success', 'bg-warning', 'bg-secondary', 'bg-danger');
     if (state === 'connected') {
       statusBadge.classList.add('bg-success');
     } else if (state === 'paused') {
       statusBadge.classList.add('bg-secondary');
+    } else if (state === 'error') {
+      statusBadge.classList.add('bg-danger');
     } else {
       statusBadge.classList.add('bg-warning');
     }
   };
 
-  const trimLines = () => {
-    const lines = logOutput.textContent.split('\n');
-    if (lines.length > MAX_LINES) {
-      logOutput.textContent = lines.slice(-MAX_LINES).join('\n');
-    }
+  const updateStats = () => {
+    if (!logStats) return;
+    logStats.textContent = `Lines: ${stats.total} | Errors: ${stats.errors} | Warnings: ${stats.warnings}`;
   };
 
-  const appendLines = (lines) => {
-    if (!lines || !lines.length) return;
-    const content = lines.join('\n');
-    if (logOutput.textContent) {
-      logOutput.textContent += `\n${content}`;
-    } else {
-      logOutput.textContent = content;
-    }
-    trimLines();
+  const getLogLevel = (line) => {
+    if (line.includes('| ERROR |') || line.includes(' ERROR ')) return 'ERROR';
+    if (line.includes('| WARNING |') || line.includes(' WARNING ')) return 'WARNING';
+    if (line.includes('| INFO |') || line.includes(' INFO ')) return 'INFO';
+    if (line.includes('| DEBUG |') || line.includes(' DEBUG ')) return 'DEBUG';
+    return 'INFO'; // Default
+  };
+
+  const formatLine = (line) => {
+    const level = getLogLevel(line);
+    let className = 'log-line';
+    if (level === 'ERROR') className += ' log-error';
+    else if (level === 'WARNING') className += ' log-warning';
+    else if (level === 'INFO') className += ' log-info';
+    else if (level === 'DEBUG') className += ' log-debug';
+
+    // Escape HTML
+    const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<span class="${className}">${escaped}</span>`;
+  };
+
+  const filterAndRender = () => {
+    const levelFilter = logLevelFilter?.value || '';
+    const searchTerm = (logSearchFilter?.value || '').toLowerCase();
+    const minPriority = levelFilter ? LOG_LEVEL_PRIORITY[levelFilter] : -1;
+
+    const filteredLines = allLines.filter(line => {
+      // Level filter
+      if (minPriority >= 0) {
+        const lineLevel = getLogLevel(line);
+        if (LOG_LEVEL_PRIORITY[lineLevel] < minPriority) return false;
+      }
+      // Search filter
+      if (searchTerm && !line.toLowerCase().includes(searchTerm)) return false;
+      return true;
+    });
+
+    logOutput.innerHTML = filteredLines.map(formatLine).join('\n');
+
     if (autoScrollToggle?.checked) {
       logOutput.scrollTop = logOutput.scrollHeight;
     }
   };
 
+  const trimLines = () => {
+    if (allLines.length > MAX_LINES) {
+      allLines = allLines.slice(-MAX_LINES);
+    }
+  };
+
+  const appendLines = (lines) => {
+    if (!lines || !lines.length) return;
+
+    for (const line of lines) {
+      allLines.push(line);
+      stats.total++;
+      const level = getLogLevel(line);
+      if (level === 'ERROR') stats.errors++;
+      else if (level === 'WARNING') stats.warnings++;
+    }
+
+    trimLines();
+    filterAndRender();
+    updateStats();
+  };
+
+  const resetState = () => {
+    offset = 0;
+    pendingLine = '';
+    firstFetch = true;
+    allLines = [];
+    stats = { total: 0, errors: 0, warnings: 0 };
+    logOutput.innerHTML = '';
+    updateStats();
+  };
+
   const fetchLogs = async () => {
     try {
-      const url = firstFetch ? '/api/admin/logs?offset=tail' : `/api/admin/logs?offset=${offset}`;
+      const fileParam = `file=${currentLogFile}`;
+      const url = firstFetch
+        ? `/api/admin/logs?${fileParam}&offset=tail`
+        : `/api/admin/logs?${fileParam}&offset=${offset}`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Unexpected response: ${response.status}`);
       }
       const data = await response.json();
+
+      // Check if log file changed on server side
+      if (data.log_file && data.log_file !== currentLogFile) {
+        return; // Ignore stale response
+      }
+
       const nextOffset = Number.isFinite(data.offset) ? data.offset : offset;
       const fileSize = Number.isFinite(data.file_size) ? data.file_size : null;
+
+      // Detect file rotation
       if ((fileSize !== null && fileSize < offset) || nextOffset < offset) {
-        logOutput.textContent = '';
-        pendingLine = '';
+        resetState();
       }
+
       offset = nextOffset;
       let lines = Array.isArray(data.lines) ? data.lines : [];
+
       if (pendingLine) {
         if (lines.length) {
           lines[0] = `${pendingLine}${lines[0]}`;
@@ -423,16 +507,36 @@ function initLogViewer() {
     setStatus('paused', 'Paused');
   };
 
-  if (startBtn) {
-    startBtn.addEventListener('click', startPolling);
-  }
-  if (stopBtn) {
-    stopBtn.addEventListener('click', stopPolling);
-  }
+  const switchLogFile = () => {
+    const newFile = logFileSelect?.value || 'app';
+    if (newFile !== currentLogFile) {
+      currentLogFile = newFile;
+      resetState();
+      if (pollTimer) {
+        fetchLogs(); // Fetch immediately on switch
+      }
+    }
+  };
+
+  // Event listeners
+  if (startBtn) startBtn.addEventListener('click', startPolling);
+  if (stopBtn) stopBtn.addEventListener('click', stopPolling);
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
-      logOutput.textContent = '';
+      allLines = [];
+      stats = { total: 0, errors: 0, warnings: 0 };
+      logOutput.innerHTML = '';
       pendingLine = '';
+      updateStats();
+    });
+  }
+  if (logFileSelect) logFileSelect.addEventListener('change', switchLogFile);
+  if (logLevelFilter) logLevelFilter.addEventListener('change', filterAndRender);
+  if (logSearchFilter) {
+    let searchTimeout;
+    logSearchFilter.addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(filterAndRender, 150); // Debounce
     });
   }
 
