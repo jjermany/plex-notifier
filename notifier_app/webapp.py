@@ -90,9 +90,12 @@ def create_app():
     # Suppress overly verbose logs
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     app = Flask(__name__, instance_relative_config=True)
     app.logger.setLevel(level)
+    # Remove Flask's default handlers to prevent duplicate console output
+    app.logger.handlers.clear()
     log_dir = os.path.abspath(os.path.join(app.root_path, "..", "instance", "logs"))
     os.makedirs(log_dir, exist_ok=True)
     app_log_path = os.path.join(log_dir, "app.log")
