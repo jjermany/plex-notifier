@@ -4,6 +4,7 @@ import requests
 import logging
 import time
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.mime.multipart import MIMEMultipart
@@ -2040,11 +2041,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             if email_success:
                 # Log to file
                 user_log = get_user_logger(email)
+                send_batch_id = uuid.uuid4().hex
                 for ep_payload in eps:
                     ep = ep_payload["episode"]
                     user_log.info(f"Notified: {ep.grandparentTitle} [Key:{ep.grandparentRatingKey}] S{ep.parentIndex}E{ep.index} - {ep.title}")
                     # Save to database for better tracking
-                    _save_notification_to_db(email, ep, ep_payload.get("show_guid"))
+                    _save_notification_to_db(
+                        email,
+                        ep,
+                        ep_payload.get("show_guid"),
+                        send_batch_id=send_batch_id,
+                    )
 
                 current_app.logger.info(
                     "✅ Email sent to %s with %s episodes",
@@ -2098,6 +2105,7 @@ def _save_notification_to_db(
     email: str,
     episode: Episode,
     show_guid_override: Optional[str] = None,
+    send_batch_id: Optional[str] = None,
 ) -> None:
     """Save notification to database for tracking and deduplication."""
     try:
@@ -2154,6 +2162,7 @@ def _save_notification_to_db(
             return
         notification = Notification(
             email=normalized_email,
+            send_batch_id=send_batch_id,
             show_title=show_title,
             show_key=show_key,
             show_guid=show_guid,

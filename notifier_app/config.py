@@ -42,6 +42,7 @@ class Notification(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String, nullable=False, index=True)
+    send_batch_id = db.Column(db.String, nullable=True, index=True)
     show_title = db.Column(db.String, nullable=False)
     show_key = db.Column(db.String, nullable=False, index=True)
     show_guid = db.Column(db.String, nullable=True, index=True)
@@ -63,6 +64,7 @@ class Notification(db.Model):
         db.UniqueConstraint('email', 'imdb_id', 'season', 'episode', name='uq_notification_imdb_id'),
         db.UniqueConstraint('email', 'plex_guid', 'season', 'episode', name='uq_notification_plex_guid'),
         db.Index('idx_email_timestamp', 'email', 'timestamp'),
+        db.Index('idx_notifications_send_batch_id', 'send_batch_id'),
         db.Index('idx_show_key_season_episode', 'show_key', 'season', 'episode'),
         db.Index('idx_show_guid', 'show_guid'),
         db.Index('idx_notification_tvdb_id', 'tvdb_id'),

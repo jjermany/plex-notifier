@@ -6,6 +6,7 @@ from functools import wraps
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from logging.handlers import RotatingFileHandler
+from collections import defaultdict
 from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -37,7 +38,7 @@ from .notifier import (
     _select_notification_to_keep,
 )
 from .logging_utils import TZFormatter
-from sqlalchemy import inspect, text, or_
+from sqlalchemy import inspect, text, or_, func, cast, String, literal
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
 
@@ -72,6 +73,61 @@ def _parse_log_level(env_value: str, default: int = logging.INFO) -> int:
         "CRITICAL": logging.CRITICAL,
     }
     return level_map.get(env_value.upper(), default)
+
+
+def _format_episode_range_list(episodes: list[int]) -> str:
+    if not episodes:
+        return ""
+
+    ordered = sorted(set(episodes))
+    ranges: list[str] = []
+    start = ordered[0]
+    prev = ordered[0]
+
+    for episode in ordered[1:]:
+        if episode == prev + 1:
+            prev = episode
+            continue
+        ranges.append(
+            f"E{start:02d}" if start == prev else f"E{start:02d}-E{prev:02d}"
+        )
+        start = prev = episode
+
+    ranges.append(
+        f"E{start:02d}" if start == prev else f"E{start:02d}-E{prev:02d}"
+    )
+    return ", ".join(ranges)
+
+
+def _build_history_batch_summary(notifications: list[Notification]) -> str:
+    grouped_by_show: dict[str, list[Notification]] = defaultdict(list)
+    for notif in notifications:
+        grouped_by_show[notif.show_title].append(notif)
+
+    show_summaries: list[str] = []
+    for show_title in sorted(grouped_by_show, key=str.lower):
+        show_notifications = sorted(
+            grouped_by_show[show_title],
+            key=lambda notif: (notif.season, notif.episode),
+        )
+        if len(show_notifications) == 1:
+            notif = show_notifications[0]
+            show_summaries.append(f"{show_title} S{notif.season:02d}E{notif.episode:02d}")
+            continue
+
+        episodes_by_season: dict[int, list[int]] = defaultdict(list)
+        for notif in show_notifications:
+            episodes_by_season[notif.season].append(notif.episode)
+
+        season_summaries = [
+            f"S{season:02d}{_format_episode_range_list(episodes_by_season[season])}"
+            for season in sorted(episodes_by_season)
+        ]
+        show_summaries.append(
+            f"{show_title} ({len(show_notifications)} eps: {'; '.join(season_summaries)})"
+        )
+
+    return "; ".join(show_summaries)
 
 
 def create_app():
@@ -289,6 +345,7 @@ def create_app():
                     conn.execute(text('ALTER TABLE notifications ADD COLUMN show_guid VARCHAR'))
                     app.logger.info("Added show_guid column to notifications table")
                 notification_columns_to_add = {
+                    "send_batch_id": "VARCHAR",
                     "tvdb_id": "VARCHAR",
                     "tmdb_id": "VARCHAR",
                     "imdb_id": "VARCHAR",
@@ -303,6 +360,15 @@ def create_app():
                             "Added %s column to notifications table",
                             column_name,
                         )
+                existing_indexes = {idx["name"] for idx in inspector.get_indexes("notifications")}
+                if "idx_notifications_send_batch_id" not in existing_indexes:
+                    conn.execute(
+                        text(
+                            "CREATE INDEX idx_notifications_send_batch_id "
+                            "ON notifications (send_batch_id)"
+                        )
+                    )
+                    app.logger.info("Added idx_notifications_send_batch_id index to notifications table")
             if 'user_preferences' in inspector.get_table_names():
                 existing_cols = {c['name'] for c in inspector.get_columns('user_preferences')}
                 if 'show_guid' not in existing_cols:
@@ -1211,27 +1277,73 @@ def create_app():
             if matched_users:
                 base_query = base_query.filter(Notification.email.in_(matched_users))
 
+        notification_group_key = func.coalesce(
+            Notification.send_batch_id,
+            literal("legacy-") + cast(Notification.id, String),
+        )
+        grouped_query = (
+            base_query
+            .with_entities(
+                notification_group_key.label("group_key"),
+                func.max(Notification.timestamp).label("latest_timestamp"),
+            )
+            .group_by(notification_group_key)
+            .order_by(func.max(Notification.timestamp).desc())
+        )
+        grouped_subquery = grouped_query.subquery()
+
         # Get total count for pagination
-        total_count = base_query.count()
+        total_count = db.session.query(func.count()).select_from(grouped_subquery).scalar() or 0
         total_pages = max((total_count - 1) // per_page + 1, 1) if total_count > 0 else 1
 
-        # Get paginated notifications
-        notifications = (
-            base_query
-            .order_by(Notification.timestamp.desc())
+        paged_groups = (
+            db.session.query(
+                grouped_subquery.c.group_key,
+                grouped_subquery.c.latest_timestamp,
+            )
+            .order_by(grouped_subquery.c.latest_timestamp.desc())
             .limit(per_page)
             .offset((page - 1) * per_page)
+            .subquery()
+        )
+
+        notifications = (
+            db.session.query(Notification, paged_groups.c.group_key, paged_groups.c.latest_timestamp)
+            .join(paged_groups, notification_group_key == paged_groups.c.group_key)
+            .order_by(
+                paged_groups.c.latest_timestamp.desc(),
+                Notification.show_title.asc(),
+                Notification.season.asc(),
+                Notification.episode.asc(),
+            )
             .all()
         )
 
-        # Convert to entries format
+        grouped_notifications: dict[str, dict[str, object]] = {}
+        for notif, group_key, latest_timestamp in notifications:
+            if group_key not in grouped_notifications:
+                grouped_notifications[group_key] = {
+                    "notifications": [],
+                    "timestamp": latest_timestamp,
+                    "email": notif.email,
+                }
+            grouped_notifications[group_key]["notifications"].append(notif)
+
         entries = []
-        for notif in notifications:
-            message = f"Sent to {notif.email} | Episodes: {notif.show_title} S{notif.season}E{notif.episode}"
+        for row in (
+            db.session.query(paged_groups.c.group_key, paged_groups.c.latest_timestamp)
+            .order_by(paged_groups.c.latest_timestamp.desc())
+            .all()
+        ):
+            group = grouped_notifications.get(row.group_key)
+            if not group:
+                continue
+            summary = _build_history_batch_summary(group["notifications"])
+            message = f"Sent to {group['email']} | Episodes: {summary}"
             entries.append({
-                'time': fmt_dt(notif.timestamp),
+                'time': fmt_dt(group["timestamp"]),
                 'message': message,
-                'dt': notif.timestamp
+                'dt': group["timestamp"],
             })
 
         # Get user preferences for single user view
