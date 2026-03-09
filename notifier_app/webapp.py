@@ -1202,7 +1202,7 @@ def create_app():
 
         file_size = os.path.getsize(log_path)
         if tail_requested:
-            offset = file_size
+            offset = max(file_size - max_bytes, 0)
         elif offset < 0 or offset > file_size:
             offset = 0
 
