@@ -1849,6 +1849,16 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if _user_has_history(s, uid, ep.ratingKey):
                     continue
 
+                # 🆕 Don't notify for an old episode if a newer one has been watched
+                if _user_has_watched_newer_episode(
+                    s,
+                    uid,
+                    show_key,
+                    ep.parentIndex,
+                    ep.index,
+                ):
+                    continue
+
                 season_episode = f"S{ep.parentIndex}E{ep.index}"
                 candidate_ids: List[str] = []
                 if ep.ratingKey:
@@ -2462,6 +2472,67 @@ def _user_is_subscribed_for_show(
     return False, ""
 
 
+def _user_has_watched_newer_episode(
+    s: Settings,
+    user_id: int,
+    grandparent_rating_key: Any,
+    current_season: int,
+    current_episode: int,
+) -> bool:
+    """Check if a user has watched an episode of a show newer than the current one."""
+    try:
+        base = f"{s.tautulli_url.rstrip('/')}/api/v2"
+        page_length = TAUTULLI_MAX_PAGE_LENGTH
+        start = 0
+        grandparent_key_str = str(grandparent_rating_key) if grandparent_rating_key is not None else ""
+
+        while True:
+            params = {
+                'apikey': s.tautulli_api_key,
+                'cmd': 'get_history',
+                'user_id': user_id,
+                'start': start,
+                'length': page_length
+            }
+            if grandparent_rating_key is not None:
+                params['grandparent_rating_key'] = grandparent_rating_key
+
+            resp = requests.get(base, params=params, timeout=10)
+            resp.raise_for_status()
+
+            payload = resp.json().get('response', {}).get('data', {})
+            history = payload.get('data') or []
+
+            for item in history:
+                gp_key = str(item.get('grandparent_rating_key'))
+                if grandparent_rating_key is not None and gp_key != grandparent_key_str:
+                    continue
+
+                history_season = item.get('parent_media_index')
+                history_episode = item.get('media_index')
+
+                if isinstance(history_season, int) and isinstance(history_episode, int):
+                    if history_season > current_season:
+                        return True
+                    if history_season == current_season and history_episode > current_episode:
+                        return True
+
+            records_filtered = payload.get('recordsFiltered')
+            if not history:
+                break
+
+            consumed = start + len(history)
+            if isinstance(records_filtered, int) and consumed >= records_filtered:
+                break
+
+            start = consumed
+
+        return False
+    except Exception as e:
+        current_app.logger.error(f"Error checking newer episode history for user {user_id}: {e}")
+        return False
+
+
 def _user_has_watched_show(
     s: Settings,
     user_id: int,
@@ -2522,7 +2593,7 @@ def _user_has_watched_show(
 
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
-        # Tautulli's API caps the history "length" parameter at 1000 records.
+        # Tautulli's API caps the history "length" parameter.
         page_length = 1000
         start = 0
         grandparent_key_str = str(grandparent_rating_key) if grandparent_rating_key is not None else ""
