@@ -86,11 +86,20 @@
           novalidate>
       {{ form.hidden_tag() }}
 
-      <!-- Plex & Watch History Card -->
+      <!-- Media Server Card -->
       <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-server"></i> Plex &amp; Watch History Configuration
+        <div class="card-header p-0">
+          <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#mediaServerSettings"
+                  aria-expanded="true"
+                  aria-controls="mediaServerSettings">
+            <span><i class="bi bi-server me-2"></i> Media Server</span>
+            <i class="bi bi-chevron-down collapse-icon"></i>
+          </button>
         </div>
+        <div id="mediaServerSettings" class="collapse show">
         <div class="card-body">
           <!-- Plex URL -->
           <div class="mb-3">
@@ -127,6 +136,25 @@
             {% endif %}
           </div>
 
+        </div>
+        </div>
+      </div>
+
+      <!-- Watch History Card -->
+      <div class="card mb-4">
+        <div class="card-header p-0">
+          <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#watchHistorySettings"
+                  aria-expanded="true"
+                  aria-controls="watchHistorySettings">
+            <span><i class="bi bi-clock-history me-2"></i> Watch History</span>
+            <i class="bi bi-chevron-down collapse-icon"></i>
+          </button>
+        </div>
+        <div id="watchHistorySettings" class="collapse show">
+        <div class="card-body">
           <!-- Watch History Source -->
           <div class="mb-3">
             {{ form.watch_history_source.label(class="form-label text-white") }}
@@ -214,14 +242,52 @@
             </div>
           </div>
           </div>
+
+          <hr class="border-secondary my-4">
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <button type="button"
+                    class="btn btn-outline-info hover-lift"
+                    id="testWatchHistoryBtn">
+              <i class="bi bi-shield-check"></i> Verify Watch History Connection
+            </button>
+            <button type="submit"
+                    name="save_action"
+                    value="watch_history"
+                    class="btn btn-success hover-lift"
+                    id="saveSettingsBtn"
+                    {% if not watch_history_tested %}disabled{% endif %}>
+              <i class="bi bi-check-circle-fill"></i> Save Watch History Settings
+            </button>
+          </div>
+          <div id="watchHistoryTestStatus"
+               class="alert mt-3 mb-0 {{ 'alert-success' if watch_history_tested else 'alert-secondary' }}"
+               role="status">
+            {% if watch_history_tested %}
+              <i class="bi bi-check-circle-fill"></i>
+              Connection verified. Watch history settings can be saved.
+            {% else %}
+              <i class="bi bi-info-circle"></i>
+              Verify the selected connection to enable Save Watch History Settings.
+            {% endif %}
+          </div>
+        </div>
         </div>
       </div>
 
       <!-- Email Settings Card -->
       <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-envelope-fill"></i> Email Settings
+        <div class="card-header p-0">
+          <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#emailSettings"
+                  aria-expanded="false"
+                  aria-controls="emailSettings">
+            <span><i class="bi bi-envelope-fill me-2"></i> Email Settings</span>
+            <i class="bi bi-chevron-down collapse-icon"></i>
+          </button>
         </div>
+        <div id="emailSettings" class="collapse">
         <div class="card-body">
           <div class="row mb-3">
             <div class="col-md-8">
@@ -318,13 +384,23 @@
             {% endif %}
           </div>
         </div>
+        </div>
       </div>
 
       <!-- Poll Interval Card -->
       <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-arrow-repeat"></i> Polling Interval
+        <div class="card-header p-0">
+          <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#pollingSettings"
+                  aria-expanded="false"
+                  aria-controls="pollingSettings">
+            <span><i class="bi bi-arrow-repeat me-2"></i> Polling Interval</span>
+            <i class="bi bi-chevron-down collapse-icon"></i>
+          </button>
         </div>
+        <div id="pollingSettings" class="collapse">
         <div class="card-body">
           <div class="mb-3">
             {{ form.notify_interval.label(class="form-label text-white") }}
@@ -345,44 +421,34 @@
             {% endif %}
           </div>
         </div>
+        </div>
       </div>
 
-      <!-- Test and Save Buttons -->
-      <div class="card mb-4">
-        <div class="card-body text-start">
-          <div class="d-flex flex-wrap gap-2 align-items-center">
-          <button type="button"
-                  class="btn btn-outline-info btn-lg hover-lift"
-                  id="testWatchHistoryBtn">
-            <i class="bi bi-plug-fill"></i> Test Watch History Connection
-          </button>
-          <button type="submit"
-                  class="btn btn-success btn-lg hover-lift"
-                  id="saveSettingsBtn"
-                  {% if not watch_history_tested %}disabled{% endif %}>
-            <i class="bi bi-check-circle-fill"></i> Save Settings
-          </button>
-          </div>
-          <div id="watchHistoryTestStatus"
-               class="alert mt-3 mb-0 {{ 'alert-success' if watch_history_tested else 'alert-secondary' }}"
-               role="status">
-            {% if watch_history_tested %}
-              <i class="bi bi-check-circle-fill"></i>
-              Watch history connection verified. Settings can be saved.
-            {% else %}
-              <i class="bi bi-info-circle"></i>
-              Test the selected watch history connection to enable Save Settings.
-            {% endif %}
-          </div>
-        </div>
+      <div class="d-flex justify-content-end mb-4">
+        <button type="submit"
+                name="save_action"
+                value="general"
+                class="btn btn-primary btn-lg hover-lift"
+                id="saveGeneralSettingsBtn">
+          <i class="bi bi-save-fill"></i> Save General Settings
+        </button>
       </div>
     </form>
 
     <!-- Manual Check Card -->
     <div class="card mb-4">
-      <div class="card-header">
-        <i class="bi bi-play-circle-fill"></i> Manual Check
+      <div class="card-header p-0">
+        <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#manualCheckSettings"
+                aria-expanded="false"
+                aria-controls="manualCheckSettings">
+          <span><i class="bi bi-play-circle-fill me-2"></i> Manual Check</span>
+          <i class="bi bi-chevron-down collapse-icon"></i>
+        </button>
       </div>
+      <div id="manualCheckSettings" class="collapse">
       <div class="card-body">
         <form method="post" action="{{ url_for('run_check') }}" id="runForm">
           {{ manual_check_form.hidden_tag() }}
@@ -403,13 +469,23 @@
           </button>
         </form>
       </div>
+      </div>
     </div>
 
     <!-- Test Email Card -->
     <div class="card mb-4">
-      <div class="card-header">
-        <i class="bi bi-send-fill"></i> Test Email
+      <div class="card-header p-0">
+        <button class="btn settings-section-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#testEmailSettings"
+                aria-expanded="false"
+                aria-controls="testEmailSettings">
+          <span><i class="bi bi-send-fill me-2"></i> Test Email</span>
+          <i class="bi bi-chevron-down collapse-icon"></i>
+        </button>
       </div>
+      <div id="testEmailSettings" class="collapse">
       <div class="card-body">
         <form method="post" action="{{ url_for('send_test_email') }}" id="testForm">
           {{ test_form.hidden_tag() }}
@@ -431,6 +507,7 @@
             <i class="bi bi-send"></i> Send Test Email
           </button>
         </form>
+      </div>
       </div>
     </div>
 

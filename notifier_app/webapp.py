@@ -892,24 +892,51 @@ def create_app():
         manual_check_form = ManualCheckForm()
 
         if form.validate_on_submit():
-            submitted_fingerprint = _watch_history_connection_fingerprint(
-                form.watch_history_source.data,
-                form.tautulli_url.data,
-                form.tautulli_api_key.data,
-                form.tracearr_url.data,
-                form.tracearr_api_key.data,
-            )
-            if session.get("watch_history_connection_fingerprint") != submitted_fingerprint:
-                flash(
-                    'Test the selected watch history connection before saving settings.',
-                    'warning',
+            save_action = request.form.get("save_action", "general")
+            if save_action == "watch_history":
+                submitted_fingerprint = _watch_history_connection_fingerprint(
+                    form.watch_history_source.data,
+                    form.tautulli_url.data,
+                    form.tautulli_api_key.data,
+                    form.tracearr_url.data,
+                    form.tracearr_api_key.data,
                 )
+                if session.get("watch_history_connection_fingerprint") != submitted_fingerprint:
+                    flash(
+                        'Verify the selected watch history connection before saving it.',
+                        'warning',
+                    )
+                else:
+                    for field_name in (
+                        "watch_history_source",
+                        "tautulli_url",
+                        "tautulli_api_key",
+                        "tracearr_url",
+                        "tracearr_api_key",
+                    ):
+                        setattr(s, field_name, getattr(form, field_name).data)
+                    db.session.add(s)
+                    db.session.commit()
+                    flash('Watch history settings saved!', 'success')
+                    return redirect(url_for('settings'))
             else:
-                form.populate_obj(s)
-                s.notify_interval = s.notify_interval or 30
+                for field_name in (
+                    "plex_url",
+                    "plex_token",
+                    "smtp_host",
+                    "smtp_port",
+                    "smtp_user",
+                    "smtp_pass",
+                    "from_address",
+                    "notify_new_episodes",
+                    "notify_interval",
+                    "base_url",
+                ):
+                    setattr(s, field_name, getattr(form, field_name).data)
+                s.notify_interval = form.notify_interval.data or 30
                 db.session.add(s)
                 db.session.commit()
-                flash('Settings saved!', 'success')
+                flash('General settings saved!', 'success')
 
                 sched = app.config.get('scheduler')
                 if sched:

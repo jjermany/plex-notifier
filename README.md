@@ -182,9 +182,10 @@ Switching from Tautulli to Tracearr does not reset notification history. Previou
 episodes remain in the notifier database and are checked before email delivery, including
 alerts older than the former 200-entry cache window.
 
-Before settings can be saved, use **Test Watch History Connection**. The Save Settings
-button remains disabled until the currently selected provider URL and API key pass the
-connection test. Changing the provider, URL, or key requires another successful test.
+The settings page is divided into collapsible sections. In **Watch History**, use
+**Verify Watch History Connection** before **Save Watch History Settings** becomes
+available. Changing the provider, URL, or key requires another successful verification.
+Plex, email, and polling changes use the independent **Save General Settings** action.
 
 ### 📧 Email Settings
 | Field | Example | Description |

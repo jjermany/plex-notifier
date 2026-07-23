@@ -621,3 +621,25 @@ body.auth-page::before {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.75rem;
 }
+.settings-section-toggle {
+  color: var(--bs-light);
+  padding: 1rem 1.25rem;
+  border: 0;
+  border-radius: 0;
+  font-weight: 600;
+}
+
+.settings-section-toggle:hover,
+.settings-section-toggle:focus {
+  color: var(--plex-orange);
+  background-color: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+}
+
+.settings-section-toggle .collapse-icon {
+  transition: transform 0.2s ease;
+}
+
+.settings-section-toggle[aria-expanded="true"] .collapse-icon {
+  transform: rotate(180deg);
+}

@@ -46,26 +46,30 @@ def test_settings_save_requires_matching_connection_proof(monkeypatch, tmp_path)
     ).group(1).decode()
     form_data = {
         "csrf_token": csrf_token,
+        "save_action": "watch_history",
         "plex_url": "http://plex.test",
         "plex_token": "updated-token",
-        "watch_history_source": "tautulli",
+        "watch_history_source": "tracearr",
         "tautulli_url": "http://tautulli.test",
         "tautulli_api_key": "tautulli-key",
+        "tracearr_url": "http://tracearr.test",
+        "tracearr_api_key": "trr_pub_test",
         "notify_interval": "30",
     }
 
     blocked = client.post("/settings", data=form_data)
     assert blocked.status_code == 200
-    assert b"Test the selected watch history connection before saving settings." in blocked.data
+    assert b"Verify the selected watch history connection before saving it." in blocked.data
     with app.app_context():
         assert Settings.query.first().plex_token == "placeholder"
+        assert Settings.query.first().watch_history_source == "tautulli"
 
     with patch(
         "notifier_app.webapp._test_watch_history_connection",
         return_value={
-            "provider": "Tautulli",
-            "version": "2.17.0",
-            "message": "Connected to Tautulli 2.17.0.",
+            "provider": "Tracearr",
+            "version": "1.5.0",
+            "message": "Connected to Tracearr 1.5.0.",
         },
     ):
         tested = client.post("/api/test-watch-history", data=form_data)
@@ -74,5 +78,15 @@ def test_settings_save_requires_matching_connection_proof(monkeypatch, tmp_path)
 
     saved = client.post("/settings", data=form_data)
     assert saved.status_code == 302
+    with app.app_context():
+        assert Settings.query.first().watch_history_source == "tracearr"
+        assert Settings.query.first().tracearr_url == "http://tracearr.test"
+        assert Settings.query.first().plex_token == "placeholder"
+
+    with client.session_transaction() as session:
+        session.pop("watch_history_connection_fingerprint", None)
+    form_data["save_action"] = "general"
+    general_saved = client.post("/settings", data=form_data)
+    assert general_saved.status_code == 302
     with app.app_context():
         assert Settings.query.first().plex_token == "updated-token"

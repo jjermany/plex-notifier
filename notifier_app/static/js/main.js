@@ -230,7 +230,7 @@ function initSettingsPage() {
       }
       setWatchHistoryTestState(
         false,
-        'Connection settings changed. Test the watch history connection again to enable Save Settings.',
+        'Connection settings changed. Verify again to enable Save Watch History Settings.',
         'secondary'
       );
     };
@@ -300,15 +300,18 @@ function initSettingsPage() {
     }
 
     settingsForm.addEventListener('submit', function(e) {
+      const saveAction = e.submitter ? e.submitter.value : 'general';
+      const savingWatchHistory = saveAction === 'watch_history';
+
       // Clear previous errors
       const fields = settingsForm.querySelectorAll('.form-control');
       fields.forEach(field => clearFieldError(field));
 
       let isValid = true;
 
-      if (!watchHistoryTested) {
+      if (savingWatchHistory && !watchHistoryTested) {
         e.preventDefault();
-        showToast('Test the watch history connection before saving settings.', 'warning');
+        showToast('Verify the watch history connection before saving it.', 'warning');
         return false;
       }
 
@@ -372,7 +375,7 @@ function initSettingsPage() {
       }
 
       // Disable submit button
-      const submitBtn = settingsForm.querySelector('button[type="submit"]');
+      const submitBtn = e.submitter || settingsForm.querySelector('button[type="submit"]');
       setButtonLoading(submitBtn);
     });
   }
