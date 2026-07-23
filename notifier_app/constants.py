@@ -35,6 +35,9 @@ LOG_BACKUP_COUNT = 1
 TAUTULLI_MAX_PAGE_LENGTH = 1000  # Maximum records per page
 TAUTULLI_WATCHED_PERCENT_THRESHOLD = 80  # Minimum percent watched to qualify as "watched"
 
+# Reconciliation
+SHOW_MISSING_GRACE_DAYS = 7  # Time missing from Plex before a show is considered removed
+
 # Rate limiting
 RATE_LIMIT_TEST_EMAIL = "5 per hour"
 RATE_LIMIT_TEST_WATCH_HISTORY = "10 per hour"

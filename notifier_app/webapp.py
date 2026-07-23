@@ -500,6 +500,10 @@ def create_app():
                 "title": "VARCHAR",
                 "year": "INTEGER",
                 "fingerprint": "VARCHAR",
+                "availability_status": "VARCHAR",
+                "missing_since": "DATETIME",
+                "last_checked_at": "DATETIME",
+                "last_seen_at": "DATETIME",
             }
             with db.engine.begin() as conn:
                 for column_name, column_type in columns_to_add.items():
@@ -512,6 +516,12 @@ def create_app():
                             column_name,
                         )
                 conn.execute(
+                    text(
+                        "UPDATE show_identities SET availability_status = 'available' "
+                        "WHERE availability_status IS NULL OR availability_status = ''"
+                    )
+                )
+                conn.execute(
                     text("CREATE INDEX IF NOT EXISTS ix_show_identities_show_guid ON show_identities (show_guid)")
                 )
                 conn.execute(
@@ -519,6 +529,12 @@ def create_app():
                 )
                 conn.execute(
                     text("CREATE INDEX IF NOT EXISTS ix_show_identities_fingerprint ON show_identities (fingerprint)")
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_show_identities_availability_status "
+                        "ON show_identities (availability_status)"
+                    )
                 )
                 conn.execute(
                     text("CREATE INDEX IF NOT EXISTS idx_show_guid_key ON show_identities (show_guid, show_key)")

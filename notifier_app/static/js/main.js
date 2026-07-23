@@ -473,8 +473,6 @@ function initLogViewer() {
   let allLines = []; // Store all fetched lines for filtering
   let stats = { total: 0, errors: 0, warnings: 0 };
 
-  const LOG_LEVEL_PRIORITY = { 'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3 };
-
   const setStatus = (state, text) => {
     if (!statusBadge) return;
     statusBadge.textContent = text;
@@ -519,14 +517,9 @@ function initLogViewer() {
   const filterAndRender = () => {
     const levelFilter = logLevelFilter?.value || '';
     const searchTerm = (logSearchFilter?.value || '').toLowerCase();
-    const minPriority = levelFilter ? LOG_LEVEL_PRIORITY[levelFilter] : -1;
-
     const filteredLines = allLines.filter(line => {
       // Level filter
-      if (minPriority >= 0) {
-        const lineLevel = getLogLevel(line);
-        if (LOG_LEVEL_PRIORITY[lineLevel] < minPriority) return false;
-      }
+      if (levelFilter && getLogLevel(line) !== levelFilter) return false;
       // Search filter
       if (searchTerm && !line.toLowerCase().includes(searchTerm)) return false;
       return true;

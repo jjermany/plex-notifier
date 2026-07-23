@@ -91,6 +91,10 @@ class ShowIdentity(db.Model):
     title = db.Column(db.String)
     year = db.Column(db.Integer)
     fingerprint = db.Column(db.String, index=True)
+    availability_status = db.Column(db.String, nullable=False, default="available", index=True)
+    missing_since = db.Column(db.DateTime)
+    last_checked_at = db.Column(db.DateTime)
+    last_seen_at = db.Column(db.DateTime)
 
     __table_args__ = (
         db.Index('idx_show_guid_key', 'show_guid', 'show_key'),

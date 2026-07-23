@@ -31,6 +31,7 @@ from .constants import (
     API_RETRY_MIN_WAIT_SECONDS,
     API_RETRY_MAX_WAIT_SECONDS,
     TAUTULLI_WATCHED_PERCENT_THRESHOLD,
+    SHOW_MISSING_GRACE_DAYS,
 )
 
 from flask import current_app, Flask
@@ -450,6 +451,92 @@ def _normalize_title_for_match(title: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", title.lower())
 
 
+def _notification_show_group_key(notification: Notification) -> str:
+    """Return a stable key so reconciliation performs one Plex lookup per show."""
+    candidates = (
+        ("tvdb", notification.tvdb_id),
+        ("tmdb", notification.tmdb_id),
+        ("imdb", notification.imdb_id),
+        ("plex", notification.plex_guid),
+        ("guid", notification.show_guid if not str(notification.show_guid or "").startswith("title:") else None),
+        ("key", notification.show_key),
+    )
+    for provider, value in candidates:
+        if value:
+            return f"{provider}:{value}"
+    title, year = _extract_show_year_from_title(notification.show_title)
+    return f"title:{_normalize_title_for_match(title or notification.show_title)}:{year or ''}"
+
+
+def _identity_for_notification(notification: Notification) -> Optional[ShowIdentity]:
+    identity = _lookup_show_identity(
+        show_guid=(
+            notification.show_guid
+            if notification.show_guid and not notification.show_guid.startswith("title:")
+            else None
+        ),
+        show_key=notification.show_key,
+    )
+    if identity:
+        return identity
+    external_filters = []
+    for field in ("tvdb_id", "tmdb_id", "imdb_id", "plex_guid"):
+        value = getattr(notification, field, None)
+        if value:
+            external_filters.append(getattr(ShowIdentity, field) == value)
+    if external_filters:
+        return ShowIdentity.query.filter(or_(*external_filters)).first()
+    return None
+
+
+def _record_show_availability(
+    notification: Notification,
+    *,
+    matched_show: Any | None,
+    checked_at: datetime,
+) -> tuple[str, bool]:
+    """Persist show availability and report whether its state transitioned."""
+    identity = _identity_for_notification(notification)
+    if not identity:
+        title, year = _extract_show_year_from_title(notification.show_title)
+        identity = ShowIdentity(
+            show_guid=(
+                notification.show_guid
+                if notification.show_guid and not notification.show_guid.startswith("title:")
+                else None
+            ),
+            show_key=notification.show_key,
+            tvdb_id=notification.tvdb_id,
+            tmdb_id=notification.tmdb_id,
+            imdb_id=notification.imdb_id,
+            plex_guid=notification.plex_guid,
+            plex_rating_key=notification.show_key,
+            title=title or notification.show_title,
+            year=year,
+            fingerprint=_build_show_fingerprint(title or notification.show_title, year),
+            availability_status="available",
+        )
+        db.session.add(identity)
+
+    previous_status = identity.availability_status or "available"
+    identity.last_checked_at = checked_at
+    if matched_show is not None:
+        identity.availability_status = "available"
+        identity.missing_since = None
+        identity.last_seen_at = checked_at
+    else:
+        if identity.missing_since is None:
+            identity.missing_since = checked_at
+        missing_since = identity.missing_since
+        if missing_since.tzinfo is None:
+            missing_since = missing_since.replace(tzinfo=timezone.utc)
+        age = checked_at - missing_since
+        identity.availability_status = (
+            "removed" if age >= timedelta(days=SHOW_MISSING_GRACE_DAYS) else "missing"
+        )
+    return identity.availability_status, identity.availability_status != previous_status
+
+
 def _extract_show_guid_from_metadata(item: Any) -> List[str]:
     guid_values = []
     guid_values.extend(_coerce_guid_values(getattr(item, "guid", None)))
@@ -792,11 +879,18 @@ def _fetch_show_by_key(
             _update_identity_from_show_metadata(app, show, show_key_hint=show_key_value)
             return show
         except Exception as exc:
-            app.logger.warning(
-                "Reconciliation failed to fetch show metadata for key '%s': %s",
-                show_key_value,
-                exc,
-            )
+            error_text = str(exc).lower()
+            if "404" in error_text or "not_found" in error_text or "not found" in error_text:
+                app.logger.debug(
+                    "Plex no longer has show metadata for key '%s'.",
+                    show_key_value,
+                )
+            else:
+                app.logger.warning(
+                    "Reconciliation failed to fetch show metadata for key '%s': %s",
+                    show_key_value,
+                    exc,
+                )
             return None
 
 
@@ -1347,6 +1441,47 @@ def reconcile_notifications(
         missing_identifier_skipped = 0
         pending_updates = 0
         batch_size = 100
+        resolution_cache: Dict[str, Tuple[Any | None, str]] = {}
+        availability_by_group: Dict[str, str] = {}
+        availability_transitions: List[Tuple[str, str]] = []
+
+        def _resolve_notification_once(
+            notif: Notification,
+            *,
+            stored_guid: Optional[str],
+            stored_key: Optional[str],
+            title: Optional[str],
+            year: Optional[int],
+        ) -> Tuple[Any | None, str]:
+            nonlocal pending_updates
+            group_key = _notification_show_group_key(notif)
+            if group_key in resolution_cache:
+                return resolution_cache[group_key]
+
+            matched_show, reason = _resolve_show_match(
+                app,
+                plex,
+                tv_section,
+                show_guid=stored_guid,
+                show_key=stored_key,
+                title=title,
+                year=year,
+                record_type="Show",
+                record_id=notif.id,
+                force_title_fallback=True,
+            )
+            resolution_cache[group_key] = (matched_show, reason)
+            status, transitioned = _record_show_availability(
+                notif,
+                matched_show=matched_show,
+                checked_at=datetime.now(timezone.utc),
+            )
+            availability_by_group[group_key] = status
+            pending_updates += 1
+            if transitioned and status in {"missing", "removed"}:
+                label = title or notif.show_title or stored_guid or stored_key or "Unknown show"
+                availability_transitions.append((label, status))
+            return matched_show, reason
 
         for notif in notifications:
             stored_key = str(notif.show_key) if notif.show_key else None
@@ -1389,27 +1524,15 @@ def reconcile_notifications(
                         notif.id if notif.id is not None else "unknown",
                     )
                     continue
-                matched_show, match_reason = _resolve_show_match(
-                    app,
-                    plex,
-                    tv_section,
-                    show_guid=None,
-                    show_key=None,
+                matched_show, match_reason = _resolve_notification_once(
+                    notif,
+                    stored_guid=None,
+                    stored_key=None,
                     title=search_title,
                     year=year,
-                    record_type="Notification",
-                    record_id=notif.id,
-                    force_title_fallback=True,
                 )
                 if not matched_show:
                     missing_identifier_skipped += 1
-                    app.logger.info(
-                        "Notification reconciliation skipped notification %s: no identity match for '%s'%s (reason=%s).",
-                        notif.id if notif.id is not None else "unknown",
-                        search_title,
-                        f" ({year})" if year else "",
-                        match_reason,
-                    )
                     continue
                 new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
                 show_guids = _extract_show_guid_from_metadata(matched_show)
@@ -1520,30 +1643,15 @@ def reconcile_notifications(
             scanned_count += 1
             title, year = _extract_show_year_from_title(notif.show_title)
             with db.session.no_autoflush:
-                matched_show, failure_reason = _resolve_show_match(
-                    app,
-                    plex,
-                    tv_section,
-                    show_guid=stored_guid,
-                    show_key=stored_key,
+                matched_show, failure_reason = _resolve_notification_once(
+                    notif,
+                    stored_guid=stored_guid,
+                    stored_key=stored_key,
                     title=title or notif.show_title,
                     year=year,
-                    record_type="Notification",
-                    record_id=notif.id,
-                    force_title_fallback=True,
                 )
 
             if not matched_show:
-                app.logger.info(
-                    "Notification reconciliation could not resolve show match for notification %s "
-                    "(record_type=\"Notification\"): stored_key=%s stored_guid=%s title='%s'%s reason=%s.",
-                    notif.id if notif.id is not None else "unknown",
-                    stored_key or "None",
-                    stored_guid or "None",
-                    title or notif.show_title or "",
-                    f" ({year})" if year else "",
-                    failure_reason,
-                )
                 continue
 
             new_show_key = str(getattr(matched_show, "ratingKey", "") or "") or None
@@ -1656,12 +1764,32 @@ def reconcile_notifications(
                 db.session.rollback()
                 return
 
+        if availability_transitions:
+            transitions = ", ".join(
+                f"{title} [{status}]" for title, status in availability_transitions
+            )
+            app.logger.warning(
+                "Plex show availability changed during notification reconciliation (%s): %s. "
+                "Notification history was preserved.",
+                run_reason,
+                transitions,
+            )
+
+        status_counts = {
+            status: sum(1 for value in availability_by_group.values() if value == status)
+            for status in ("available", "missing", "removed")
+        }
         app.logger.info(
-            "Notif reconcile (%s): %s updated, %s mismatches, %s scanned, %s repaired, %s skipped.",
+            "Notif reconcile (%s): %s updated, %s mismatches, %s notifications scanned "
+            "across %s shows (%s available, %s missing, %s removed), %s repaired, %s skipped.",
             run_reason,
             updated_count,
             mismatch_count,
             scanned_count,
+            len(availability_by_group),
+            status_counts["available"],
+            status_counts["missing"],
+            status_counts["removed"],
             missing_identifier_corrected,
             missing_identifier_skipped,
         )
@@ -1675,6 +1803,13 @@ def start_scheduler(app, interval) -> BackgroundScheduler:
         minutes=interval,
         id='check_job',
         replace_existing=True
+    )
+    sched.add_job(
+        func=lambda: reconcile_notifications(app, run_reason="scheduled"),
+        trigger="interval",
+        hours=24,
+        id="notification_reconcile_job",
+        replace_existing=True,
     )
     sched.start()
     app.logger.info(f"Scheduler started, interval={interval}min")
