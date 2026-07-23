@@ -37,4 +37,5 @@ TAUTULLI_WATCHED_PERCENT_THRESHOLD = 80  # Minimum percent watched to qualify as
 
 # Rate limiting
 RATE_LIMIT_TEST_EMAIL = "5 per hour"
+RATE_LIMIT_TEST_WATCH_HISTORY = "10 per hour"
 RATE_LIMIT_MANUAL_CHECK = "3 per hour"

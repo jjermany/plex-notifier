@@ -78,7 +78,12 @@
     {% endwith %}
 
     <!-- Settings Form -->
-    <form method="post" action="{{ url_for('settings') }}" novalidate>
+    <form method="post"
+          action="{{ url_for('settings') }}"
+          id="settingsForm"
+          data-watch-history-test-url="{{ url_for('test_watch_history_connection') }}"
+          data-watch-history-tested="{{ 'true' if watch_history_tested else 'false' }}"
+          novalidate>
       {{ form.hidden_tag() }}
 
       <!-- Plex & Watch History Card -->
@@ -342,12 +347,33 @@
         </div>
       </div>
 
-      <!-- Save Button -->
+      <!-- Test and Save Buttons -->
       <div class="card mb-4">
         <div class="card-body text-start">
-          <button type="submit" class="btn btn-success btn-lg hover-lift">
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+          <button type="button"
+                  class="btn btn-outline-info btn-lg hover-lift"
+                  id="testWatchHistoryBtn">
+            <i class="bi bi-plug-fill"></i> Test Watch History Connection
+          </button>
+          <button type="submit"
+                  class="btn btn-success btn-lg hover-lift"
+                  id="saveSettingsBtn"
+                  {% if not watch_history_tested %}disabled{% endif %}>
             <i class="bi bi-check-circle-fill"></i> Save Settings
           </button>
+          </div>
+          <div id="watchHistoryTestStatus"
+               class="alert mt-3 mb-0 {{ 'alert-success' if watch_history_tested else 'alert-secondary' }}"
+               role="status">
+            {% if watch_history_tested %}
+              <i class="bi bi-check-circle-fill"></i>
+              Watch history connection verified. Settings can be saved.
+            {% else %}
+              <i class="bi bi-info-circle"></i>
+              Test the selected watch history connection to enable Save Settings.
+            {% endif %}
+          </div>
         </div>
       </div>
     </form>

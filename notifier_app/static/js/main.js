@@ -204,14 +204,113 @@ function initSettingsPage() {
   }
 
   // Settings form submission
-  const settingsForm = document.querySelector('form[action*="settings"]');
+  const settingsForm = document.getElementById('settingsForm');
   if (settingsForm) {
+    const testWatchHistoryBtn = document.getElementById('testWatchHistoryBtn');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    const watchHistoryTestStatus = document.getElementById('watchHistoryTestStatus');
+    let watchHistoryTested = settingsForm.dataset.watchHistoryTested === 'true';
+
+    const setWatchHistoryTestState = (tested, message, style = 'secondary') => {
+      watchHistoryTested = tested;
+      settingsForm.dataset.watchHistoryTested = tested ? 'true' : 'false';
+      if (saveSettingsBtn) saveSettingsBtn.disabled = !tested;
+      if (watchHistoryTestStatus) {
+        watchHistoryTestStatus.className = `alert alert-${style} mt-3 mb-0`;
+        watchHistoryTestStatus.textContent = message;
+      }
+    };
+
+    const invalidateWatchHistoryTest = (event) => {
+      const selectedSource = historySource ? historySource.value : 'tautulli';
+      const changedField = event ? event.currentTarget : null;
+      if (changedField && changedField !== historySource &&
+          !changedField.id.startsWith(`${selectedSource}_`)) {
+        return;
+      }
+      setWatchHistoryTestState(
+        false,
+        'Connection settings changed. Test the watch history connection again to enable Save Settings.',
+        'secondary'
+      );
+    };
+
+    [
+      historySource,
+      document.getElementById('tautulli_url'),
+      document.getElementById('tautulli_api_key'),
+      document.getElementById('tracearr_url'),
+      document.getElementById('tracearr_api_key')
+    ].filter(Boolean).forEach(field => {
+      field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', invalidateWatchHistoryTest);
+    });
+
+    if (testWatchHistoryBtn) {
+      testWatchHistoryBtn.addEventListener('click', async () => {
+        const source = historySource ? historySource.value : 'tautulli';
+        const urlField = document.getElementById(
+          source === 'tracearr' ? 'tracearr_url' : 'tautulli_url'
+        );
+        const keyField = document.getElementById(
+          source === 'tracearr' ? 'tracearr_api_key' : 'tautulli_api_key'
+        );
+        clearFieldError(urlField);
+        clearFieldError(keyField);
+
+        if (!urlField || !urlField.value || !isValidUrl(urlField.value)) {
+          showFieldError(urlField, `Enter a valid ${source === 'tracearr' ? 'Tracearr' : 'Tautulli'} URL`);
+          return;
+        }
+        if (!keyField || !keyField.value.trim()) {
+          showFieldError(keyField, 'Enter an API key');
+          return;
+        }
+
+        const originalHtml = testWatchHistoryBtn.innerHTML;
+        testWatchHistoryBtn.disabled = true;
+        testWatchHistoryBtn.classList.add('loading');
+        setWatchHistoryTestState(false, 'Testing connection…', 'info');
+
+        try {
+          const response = await fetch(settingsForm.dataset.watchHistoryTestUrl, {
+            method: 'POST',
+            body: new FormData(settingsForm),
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) {
+            throw new Error(result.message || 'Connection test failed');
+          }
+          setWatchHistoryTestState(true, result.message, 'success');
+          showToast(result.message, 'success');
+        } catch (error) {
+          setWatchHistoryTestState(
+            false,
+            error.message || 'Watch history connection test failed.',
+            'danger'
+          );
+          showToast(error.message || 'Watch history connection test failed.', 'danger');
+        } finally {
+          testWatchHistoryBtn.disabled = false;
+          testWatchHistoryBtn.classList.remove('loading');
+          testWatchHistoryBtn.innerHTML = originalHtml;
+        }
+      });
+    }
+
     settingsForm.addEventListener('submit', function(e) {
       // Clear previous errors
       const fields = settingsForm.querySelectorAll('.form-control');
       fields.forEach(field => clearFieldError(field));
 
       let isValid = true;
+
+      if (!watchHistoryTested) {
+        e.preventDefault();
+        showToast('Test the watch history connection before saving settings.', 'warning');
+        return false;
+      }
 
       // Validate URLs
       const plexUrl = document.getElementById('plex_url');

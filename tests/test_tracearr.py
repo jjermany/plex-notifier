@@ -19,6 +19,10 @@ from notifier_app.notifier import (
     _user_has_watched_newer_episode,
     _user_has_watched_show,
 )
+from notifier_app.webapp import (
+    _test_watch_history_connection,
+    _watch_history_connection_fingerprint,
+)
 
 
 class TracearrSettings:
@@ -65,6 +69,79 @@ class FakePlexServer:
 
 
 class TracearrSupportTests(unittest.TestCase):
+    def test_tracearr_connection_test_uses_public_health_endpoint(self):
+        response = DummyResponse(
+            {
+                "status": "ok",
+                "version": "1.5.0",
+                "servers": [{"id": "plex"}, {"id": "jellyfin"}],
+            }
+        )
+        with patch("notifier_app.webapp.requests.get", return_value=response) as get:
+            result = _test_watch_history_connection(
+                "tracearr",
+                "http://tracearr.test",
+                "trr_pub_secret",
+            )
+
+        self.assertEqual(result["provider"], "Tracearr")
+        self.assertIn("2 media servers", result["message"])
+        get.assert_called_once_with(
+            "http://tracearr.test/api/v1/public/health",
+            headers={"Authorization": "Bearer trr_pub_secret"},
+            timeout=15,
+        )
+
+    def test_tautulli_connection_test_uses_server_identity(self):
+        response = DummyResponse(
+            {
+                "response": {
+                    "result": "success",
+                    "data": [{"machine_identifier": "plex-id", "version": "2.17.0"}],
+                }
+            }
+        )
+        with patch("notifier_app.webapp.requests.get", return_value=response) as get:
+            result = _test_watch_history_connection(
+                "tautulli",
+                "http://tautulli.test",
+                "secret",
+            )
+
+        self.assertEqual(result["provider"], "Tautulli")
+        self.assertEqual(result["version"], "2.17.0")
+        get.assert_called_once_with(
+            "http://tautulli.test/api/v2",
+            params={"apikey": "secret", "cmd": "get_server_identity"},
+            timeout=15,
+        )
+
+    def test_connection_proof_changes_with_selected_credentials(self):
+        first = _watch_history_connection_fingerprint(
+            "tracearr",
+            "http://tautulli.test",
+            "tautulli-key",
+            "http://tracearr.test/",
+            "tracearr-key",
+        )
+        same = _watch_history_connection_fingerprint(
+            "tracearr",
+            "http://ignored.test",
+            "ignored-key",
+            "http://tracearr.test",
+            "tracearr-key",
+        )
+        changed = _watch_history_connection_fingerprint(
+            "tracearr",
+            "http://ignored.test",
+            "ignored-key",
+            "http://tracearr.test",
+            "different-key",
+        )
+
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, changed)
+
     def test_public_api_paginates_with_bearer_auth(self):
         settings = TracearrSettings()
         captured = []

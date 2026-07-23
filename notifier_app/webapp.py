@@ -1,7 +1,10 @@
 import os
 import re
+import hashlib
+import json
 import logging
 import threading
+import requests
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -10,7 +13,9 @@ from collections import defaultdict
 from flask import Flask, render_template, redirect, url_for, flash, request, session, send_from_directory, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import validate_csrf
 from itsdangerous import URLSafeTimedSerializer, BadSignature
+from wtforms.validators import ValidationError
 from .config import db, Settings, UserPreferences, Notification, ShowIdentity
 from .utils import normalize_email, normalize_show_identity
 from .forms import SettingsForm, TestEmailForm, ManualCheckForm, LoginForm
@@ -20,6 +25,7 @@ from .constants import (
     SUBSCRIPTIONS_SHOWS_PER_PAGE,
     INACTIVE_SHOW_THRESHOLD_DAYS,
     RATE_LIMIT_TEST_EMAIL,
+    RATE_LIMIT_TEST_WATCH_HISTORY,
     RATE_LIMIT_MANUAL_CHECK,
     APP_LOG_MAX_BYTES,
     LOG_BACKUP_COUNT,
@@ -41,6 +47,94 @@ from .logging_utils import TZFormatter
 from sqlalchemy import inspect, text, or_, func, cast, String, literal
 
 serializer = URLSafeTimedSerializer(os.environ.get("SECRET_KEY", "change-me"))
+
+
+def _watch_history_connection_values(
+    source,
+    tautulli_url,
+    tautulli_api_key,
+    tracearr_url,
+    tracearr_api_key,
+):
+    source = str(source or "tautulli").strip().lower()
+    if source == "tracearr":
+        return source, str(tracearr_url or "").rstrip("/"), str(tracearr_api_key or "")
+    return "tautulli", str(tautulli_url or "").rstrip("/"), str(tautulli_api_key or "")
+
+
+def _watch_history_connection_fingerprint(
+    source,
+    tautulli_url,
+    tautulli_api_key,
+    tracearr_url,
+    tracearr_api_key,
+):
+    selected_source, selected_url, selected_key = _watch_history_connection_values(
+        source,
+        tautulli_url,
+        tautulli_api_key,
+        tracearr_url,
+        tracearr_api_key,
+    )
+    payload = json.dumps(
+        {
+            "source": selected_source,
+            "url": selected_url,
+            "api_key": selected_key,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _test_watch_history_connection(source, url, api_key):
+    """Validate provider credentials and APIs required by the notifier."""
+    if source not in {"tautulli", "tracearr"}:
+        raise ValueError("Unsupported watch history source.")
+    if not url or not api_key:
+        raise ValueError(f"{source.title()} URL and API key are required.")
+
+    if source == "tracearr":
+        base = url if url.endswith("/api/v1/public") else f"{url}/api/v1/public"
+        response = requests.get(
+            f"{base}/health",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") != "ok":
+            raise ValueError("Tracearr returned an unhealthy status.")
+        server_count = len(payload.get("servers") or [])
+        version = payload.get("version") or "unknown"
+        return {
+            "provider": "Tracearr",
+            "version": str(version),
+            "message": (
+                f"Connected to Tracearr {version}; "
+                f"{server_count} media server{'s' if server_count != 1 else ''} available."
+            ),
+        }
+
+    response = requests.get(
+        f"{url}/api/v2",
+        params={"apikey": api_key, "cmd": "get_server_identity"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    api_response = response.json().get("response") or {}
+    if api_response.get("result") != "success":
+        raise ValueError(api_response.get("message") or "Tautulli rejected the connection.")
+    identity = api_response.get("data") or {}
+    if isinstance(identity, list):
+        identity = identity[0] if identity else {}
+    version = identity.get("version") or "unknown"
+    return {
+        "provider": "Tautulli",
+        "version": str(version),
+        "message": f"Connected to Tautulli {version}.",
+    }
 
 
 # 🔐 Auth helpers
@@ -798,26 +892,118 @@ def create_app():
         manual_check_form = ManualCheckForm()
 
         if form.validate_on_submit():
-            form.populate_obj(s)
-            s.notify_interval = s.notify_interval or 30
-            db.session.add(s)
-            db.session.commit()
-            flash('Settings saved!', 'success')
-
-            sched = app.config.get('scheduler')
-            if sched:
-                sched.reschedule_job(
-                    'check_job',
-                    trigger='interval',
-                    minutes=s.notify_interval
+            submitted_fingerprint = _watch_history_connection_fingerprint(
+                form.watch_history_source.data,
+                form.tautulli_url.data,
+                form.tautulli_api_key.data,
+                form.tracearr_url.data,
+                form.tracearr_api_key.data,
+            )
+            if session.get("watch_history_connection_fingerprint") != submitted_fingerprint:
+                flash(
+                    'Test the selected watch history connection before saving settings.',
+                    'warning',
                 )
-                app.logger.info(
-                    f"Rescheduled check_new_episodes to every {s.notify_interval} min"
-                )
+            else:
+                form.populate_obj(s)
+                s.notify_interval = s.notify_interval or 30
+                db.session.add(s)
+                db.session.commit()
+                flash('Settings saved!', 'success')
 
-            return redirect(url_for('settings'))
+                sched = app.config.get('scheduler')
+                if sched:
+                    sched.reschedule_job(
+                        'check_job',
+                        trigger='interval',
+                        minutes=s.notify_interval
+                    )
+                    app.logger.info(
+                        f"Rescheduled check_new_episodes to every {s.notify_interval} min"
+                    )
 
-        return render_template('settings.html', form=form, test_form=test_form, manual_check_form=manual_check_form)
+                return redirect(url_for('settings'))
+
+        current_fingerprint = _watch_history_connection_fingerprint(
+            form.watch_history_source.data,
+            form.tautulli_url.data,
+            form.tautulli_api_key.data,
+            form.tracearr_url.data,
+            form.tracearr_api_key.data,
+        )
+        watch_history_tested = (
+            session.get("watch_history_connection_fingerprint") == current_fingerprint
+        )
+        return render_template(
+            'settings.html',
+            form=form,
+            test_form=test_form,
+            manual_check_form=manual_check_form,
+            watch_history_tested=watch_history_tested,
+        )
+
+    @app.route('/api/test-watch-history', methods=['POST'])
+    @requires_auth
+    @limiter.limit(RATE_LIMIT_TEST_WATCH_HISTORY)
+    def test_watch_history_connection():
+        try:
+            validate_csrf(request.form.get("csrf_token"))
+        except ValidationError:
+            return jsonify(
+                {"success": False, "message": "Invalid or expired form token. Refresh and try again."}
+            ), 400
+
+        source, url, api_key = _watch_history_connection_values(
+            request.form.get("watch_history_source"),
+            request.form.get("tautulli_url"),
+            request.form.get("tautulli_api_key"),
+            request.form.get("tracearr_url"),
+            request.form.get("tracearr_api_key"),
+        )
+        try:
+            result = _test_watch_history_connection(source, url, api_key)
+        except requests.RequestException as exc:
+            session.pop("watch_history_connection_fingerprint", None)
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            detail = f"HTTP {status_code}" if status_code else "network error"
+            app.logger.warning(
+                "Watch history connection test failed for %s (%s).",
+                source,
+                detail,
+            )
+            return jsonify(
+                {
+                    "success": False,
+                    "message": (
+                        f"{source.title()} connection failed ({detail}). "
+                        "Check the URL and API key."
+                    ),
+                }
+            ), 502
+        except Exception as exc:
+            session.pop("watch_history_connection_fingerprint", None)
+            app.logger.warning(
+                "Watch history connection test failed for %s: %s",
+                source,
+                type(exc).__name__,
+            )
+            return jsonify(
+                {
+                    "success": False,
+                    "message": f"{source.title()} connection failed: {exc}",
+                }
+            ), 502
+
+        session["watch_history_connection_fingerprint"] = (
+            _watch_history_connection_fingerprint(
+                source,
+                request.form.get("tautulli_url"),
+                request.form.get("tautulli_api_key"),
+                request.form.get("tracearr_url"),
+                request.form.get("tracearr_api_key"),
+            )
+        )
+        return jsonify({"success": True, **result})
 
     @app.route('/log-viewer')
     @requires_auth
