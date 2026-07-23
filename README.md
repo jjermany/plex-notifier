@@ -6,22 +6,22 @@
 
 Plex Notifier is a lightweight Flask-based web service that monitors your Plex library and emails users when new episodes are available — **but only for shows they’ve already shown interest in** (i.e. fully watched at least one episode).
 
-Built with Docker, designed for Unraid, and powered by Tautulli.
+Built with Docker, designed for Unraid, and powered by Tautulli or Tracearr.
 
 ---
 
 ## ✨ Features
 
 - ✅ Sends **personalized email notifications** for new episodes
-- ✅ Automatically detects user interest via Tautulli watch history
+- ✅ Automatically detects user interest via Tautulli or cross-platform Tracearr watch history
 - ✅ Fully responsive **Web UI** for configuring:
-  - Plex and Tautulli credentials
+  - Plex, Tautulli, and Tracearr credentials
   - Email (SMTP) settings
   - Notification interval
 - ✅ Users can unsubscribe globally or per-show (Beta)
 - 🔐 Optional admin login screen for admin access
 - 📄 Per-user logs stored locally for review (Beta)
-- ♻️ Skips duplicate notifications by tracking each user's last 200 alerts
+- ♻️ Skips duplicate notifications against the complete notification ledger
 - 🐳 Runs cleanly in Docker with Unraid support
 
 ---
@@ -29,7 +29,7 @@ Built with Docker, designed for Unraid, and powered by Tautulli.
 ## 🧰 Requirements
 
 - A running **Plex** Media Server
-- A **Tautulli** instance connected to your Plex
+- A **Tautulli** instance connected to Plex, or **Tracearr** connected to your media servers
 - SMTP credentials (Gmail, Mailgun, etc.)
 - Docker (or Unraid)
 
@@ -162,13 +162,25 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 After starting the container, navigate to the Web UI (e.g. `http://localhost:5000`) and fill in the following fields:
 
-### 📺 Plex & Tautulli
+### 📺 Plex & Watch History
 | Field | Example | Description |
 |-------|---------|-------------|
 | **Plex URL** | `http://localhost:32400` | URL to your Plex server. Use `http://[LAN IP]:32400` if running separately. |
 | **Plex Token** | `xxxxx` | Get your token from: [Plex Token Guide](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) |
+| **Watch History Source** | `Tracearr` | Select Tautulli or Tracearr. |
 | **Tautulli URL** | `http://localhost:8181` | URL to your Tautulli instance (must be reachable by this container). |
 | **Tautulli API Key** | `xxxxxxxx` | Found under Tautulli Settings → Web Interface → API. |
+| **Tracearr URL** | `http://localhost:3000` | URL to Tracearr. Do not include `/api/v1/public`; the notifier adds it. |
+| **Tracearr Public API Key** | `trr_pub_...` | Generate an API key in Tracearr Settings. |
+
+When Tracearr is selected, Plex still supplies recipient email addresses. Plex usernames
+must match the corresponding Tracearr identity username or display name. If the same person
+watches on Plex and Jellyfin/Emby, merge those server accounts into one Tracearr identity so
+all of their history contributes to notification eligibility.
+
+Switching from Tautulli to Tracearr does not reset notification history. Previously sent
+episodes remain in the notifier database and are checked before email delivery, including
+alerts older than the former 200-entry cache window.
 
 ### 📧 Email Settings
 | Field | Example | Description |

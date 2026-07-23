@@ -250,6 +250,20 @@ def create_app():
                 if 'base_url' not in existing_cols:
                     conn.execute(text('ALTER TABLE settings ADD COLUMN base_url VARCHAR'))
                     app.logger.info("Added base_url column to settings table")
+                if 'watch_history_source' not in existing_cols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE settings ADD COLUMN "
+                            "watch_history_source VARCHAR NOT NULL DEFAULT 'tautulli'"
+                        )
+                    )
+                    app.logger.info("Added watch_history_source column to settings table")
+                if 'tracearr_url' not in existing_cols:
+                    conn.execute(text('ALTER TABLE settings ADD COLUMN tracearr_url VARCHAR'))
+                    app.logger.info("Added tracearr_url column to settings table")
+                if 'tracearr_api_key' not in existing_cols:
+                    conn.execute(text('ALTER TABLE settings ADD COLUMN tracearr_api_key VARCHAR'))
+                    app.logger.info("Added tracearr_api_key column to settings table")
         # Migrate user_preferences table to add unique constraint if it doesn't exist
         if 'user_preferences' in inspector.get_table_names():
             try:
@@ -723,6 +737,7 @@ def create_app():
             s = Settings(
                 plex_url="http://localhost:32400",
                 plex_token="placeholder",
+                watch_history_source="tautulli",
                 notify_interval=30,
             )
             db.session.add(s)

@@ -37,8 +37,19 @@ class ManualCheckForm(FlaskForm):
 class SettingsForm(FlaskForm):
     plex_url           = StringField('Plex URL', validators=[DataRequired(), URL()])
     plex_token         = StringField('Plex Token', validators=[DataRequired()])
+    watch_history_source = SelectField(
+        'Watch History Source',
+        choices=[
+            ('tautulli', 'Tautulli'),
+            ('tracearr', 'Tracearr'),
+        ],
+        default='tautulli',
+        validators=[DataRequired()],
+    )
     tautulli_url       = StringField('Tautulli URL', validators=[Optional(), URL()])
     tautulli_api_key   = StringField('Tautulli API Key', validators=[Optional()])
+    tracearr_url       = StringField('Tracearr URL', validators=[Optional(), URL()])
+    tracearr_api_key   = StringField('Tracearr Public API Key', validators=[Optional()])
     base_url           = StringField('Base URL', validators=[Optional(), URL()])
     smtp_host          = StringField('SMTP Host', validators=[Optional()])
     smtp_port          = IntegerField('SMTP Port', validators=[Optional()])
@@ -53,3 +64,16 @@ class SettingsForm(FlaskForm):
         default=30,
         description='How often to check for new episodes.'
     )
+
+    def validate(self, extra_validators=None):
+        valid = super().validate(extra_validators=extra_validators)
+        if self.watch_history_source.data == 'tracearr':
+            if not self.tracearr_url.data:
+                self.tracearr_url.errors.append('Tracearr URL is required when Tracearr is selected.')
+                valid = False
+            if not self.tracearr_api_key.data:
+                self.tracearr_api_key.errors.append(
+                    'Tracearr public API key is required when Tracearr is selected.'
+                )
+                valid = False
+        return valid

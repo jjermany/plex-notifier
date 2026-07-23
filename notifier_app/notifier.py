@@ -89,6 +89,109 @@ serializer = URLSafeTimedSerializer(secret_key)
 notification_cache = TTLCache(maxsize=1000, ttl=NOTIFICATION_CACHE_TTL_SECONDS)
 
 
+class TracearrHistorySnapshot:
+    """Job-local Tracearr users and episode history loaded from the public API."""
+
+    def __init__(self, users: List[Dict[str, Any]], history: List[Dict[str, Any]]):
+        self.users = users
+        self.history_by_user: Dict[str, List[Dict[str, Any]]] = {}
+        for item in history:
+            user = item.get("user") or {}
+            user_id = user.get("id")
+            if user_id:
+                self.history_by_user.setdefault(str(user_id), []).append(item)
+
+    def entries_for(self, user_id: Any) -> List[Dict[str, Any]]:
+        return self.history_by_user.get(str(user_id), [])
+
+
+def _watch_history_source(s: Settings) -> str:
+    source = str(getattr(s, "watch_history_source", None) or "tautulli").strip().lower()
+    return source if source in {"tautulli", "tracearr"} else "tautulli"
+
+
+def _tracearr_api_base(s: Settings) -> str:
+    base = str(getattr(s, "tracearr_url", "") or "").rstrip("/")
+    if base.endswith("/api/v1/public"):
+        return base
+    return f"{base}/api/v1/public"
+
+
+def _tracearr_get_all(
+    s: Settings,
+    endpoint: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Read all pages from a Tracearr public API collection endpoint."""
+    page = 1
+    page_size = 100
+    results: List[Dict[str, Any]] = []
+    headers = {"Authorization": f"Bearer {s.tracearr_api_key}"}
+    base_params = dict(params or {})
+
+    while True:
+        query = {**base_params, "page": page, "pageSize": page_size}
+        response = requests.get(
+            f"{_tracearr_api_base(s)}/{endpoint.lstrip('/')}",
+            headers=headers,
+            params=query,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        page_data = payload.get("data") or []
+        if not isinstance(page_data, list):
+            raise ValueError(f"Tracearr {endpoint} response did not contain a data list")
+        results.extend(item for item in page_data if isinstance(item, dict))
+
+        meta = payload.get("meta") or {}
+        total = meta.get("total")
+        if not page_data:
+            break
+        if isinstance(total, int) and len(results) >= total:
+            break
+        if len(page_data) < page_size:
+            break
+        page += 1
+
+    return results
+
+
+def _load_tracearr_snapshot(s: Settings) -> Optional[TracearrHistorySnapshot]:
+    if not getattr(s, "tracearr_url", None) or not getattr(s, "tracearr_api_key", None):
+        current_app.logger.error("Tracearr is selected but its URL or public API key is missing.")
+        return None
+    try:
+        users = _tracearr_get_all(s, "users")
+        history = _tracearr_get_all(s, "history", params={"mediaType": "episode"})
+        current_app.logger.info(
+            "Loaded %s Tracearr user account row(s) and %s episode play(s).",
+            len(users),
+            len(history),
+        )
+        return TracearrHistorySnapshot(users, history)
+    except Exception as exc:
+        current_app.logger.error("Error loading Tracearr watch history: %s", exc)
+        return None
+
+
+def _tracearr_show_matches(
+    item: Dict[str, Any],
+    show_title: Optional[str],
+    show_year: Optional[int] = None,
+) -> bool:
+    if not show_title:
+        return False
+    item_title = item.get("showTitle")
+    if _normalize_title_for_match(item_title) != _normalize_title_for_match(show_title):
+        return False
+    # Tracearr's public history exposes the episode's year, while Plex commonly
+    # exposes the series premiere year here. Comparing them would incorrectly
+    # reject later seasons, so cross-platform matching is title-based.
+    return True
+
+
 def _coerce_guid_values(value: Any) -> List[str]:
     if not value:
         return []
@@ -1711,7 +1814,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
             current_app.logger.info("⚠️ No recent episodes found.")
             return
 
-        users = _get_users(s, machine_id)
+        tracearr_snapshot = None
+        if _watch_history_source(s) == "tracearr":
+            tracearr_snapshot = _load_tracearr_snapshot(s)
+            if tracearr_snapshot is None:
+                return
+
+        users = _get_users(s, machine_id, tracearr_snapshot=tracearr_snapshot)
         if not users:
             current_app.logger.info("⚠️ No users fetched.")
             return
@@ -1819,7 +1928,18 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_pref.show_opt_out:
                     continue
 
-                has_watched_show, _ = _user_has_watched_show(s, uid, show_key)
+                show_year = (
+                    getattr(ep, "grandparentYear", None)
+                    or getattr(ep, "year", None)
+                )
+                has_watched_show, _ = _user_has_watched_show(
+                    s,
+                    uid,
+                    show_key,
+                    show_title=show_title,
+                    show_year=show_year,
+                    tracearr_snapshot=tracearr_snapshot,
+                )
                 is_subscribed, subscription_reason = _user_is_subscribed_for_show(
                     email=canon,
                     alternate_email=user_email,
@@ -1846,7 +1966,16 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if show_pref and show_guid and show_pref.show_guid != show_guid:
                     show_pref.show_guid = show_guid
                     needs_commit = True
-                if _user_has_history(s, uid, ep.ratingKey):
+                if _user_has_history(
+                    s,
+                    uid,
+                    ep.ratingKey,
+                    show_title=show_title,
+                    show_year=show_year,
+                    season=ep.parentIndex,
+                    episode=ep.index,
+                    tracearr_snapshot=tracearr_snapshot,
+                ):
                     continue
 
                 # 🆕 Don't notify for an old episode if a newer one has been watched
@@ -1856,6 +1985,9 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                     show_key,
                     ep.parentIndex,
                     ep.index,
+                    show_title=show_title,
+                    show_year=show_year,
+                    tracearr_snapshot=tracearr_snapshot,
                 ):
                     continue
 
@@ -1870,6 +2002,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                 if not candidate_ids:
                     continue
                 if any(candidate in recent_notified for candidate in candidate_ids):
+                    continue
+                if _notification_already_sent(
+                    canon,
+                    ep,
+                    show_guid=show_guid,
+                    guid_candidates=guid_candidates,
+                ):
                     continue
 
                 watchable.append({
@@ -2111,6 +2250,62 @@ def get_user_logger(email):
     return logger
 
 
+def _notification_already_sent(
+    email: str,
+    episode: Episode,
+    *,
+    show_guid: Optional[str],
+    guid_candidates: Optional[List[str]] = None,
+) -> bool:
+    """Check the complete notification ledger before an email is sent.
+
+    The regular in-memory lookup intentionally contains only recent rows. This
+    exact query prevents a provider change or a large imported history from
+    re-sending an older notification that has fallen outside that cache.
+    """
+    normalized_email = normalize_email(email)
+    show_key = (
+        str(episode.grandparentRatingKey)
+        if episode.grandparentRatingKey is not None
+        else None
+    )
+    show_guids = _dedupe_guid_list(
+        _extract_show_guid(episode)
+        + [str(value) for value in (guid_candidates or []) if value]
+        + ([show_guid] if show_guid else [])
+    )
+    external_ids = _extract_external_show_ids(show_guids)
+    identity = _lookup_show_identity(show_guid=show_guid, show_key=show_key)
+    if identity:
+        for key in ("tvdb_id", "tmdb_id", "imdb_id", "plex_guid"):
+            if not external_ids.get(key) and getattr(identity, key, None):
+                external_ids[key] = getattr(identity, key)
+
+    conflict = _find_notification_conflict(
+        email=normalized_email,
+        season=episode.parentIndex,
+        episode=episode.index,
+        show_guid=show_guid,
+        tvdb_id=external_ids.get("tvdb_id"),
+        tmdb_id=external_ids.get("tmdb_id"),
+        imdb_id=external_ids.get("imdb_id"),
+        plex_guid=external_ids.get("plex_guid"),
+        show_key=show_key,
+    )
+    if conflict:
+        return True
+
+    if episode.ratingKey is not None:
+        return (
+            Notification.query.filter_by(
+                email=normalized_email,
+                episode_key=str(episode.ratingKey),
+            ).first()
+            is not None
+        )
+    return False
+
+
 def _save_notification_to_db(
     email: str,
     episode: Episode,
@@ -2200,7 +2395,133 @@ def _save_notification_to_db(
         db.session.rollback()
 
 
-def _get_users(s: Settings, machine_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def _normalize_account_name(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _get_tracearr_users(
+    s: Settings,
+    machine_id: Optional[str],
+    snapshot: TracearrHistorySnapshot,
+) -> List[Dict[str, Any]]:
+    """Map Plex recipients to Tracearr's cross-server identity IDs."""
+    plex = PlexServer(s.plex_url, s.plex_token)
+    account = plex.myPlexAccount()
+    recipients: List[Dict[str, Any]] = []
+
+    def _append_recipient(user: Any) -> None:
+        email = getattr(user, "email", None)
+        username = getattr(user, "username", None) or getattr(user, "title", None)
+        if email:
+            recipients.append({"email": email, "username": username})
+
+    def _has_share(user: Any) -> bool:
+        if not machine_id:
+            return True
+        try:
+            servers_attr = getattr(user, "servers", None)
+            shared_servers = servers_attr() if callable(servers_attr) else servers_attr
+        except Exception as exc:
+            current_app.logger.warning(
+                "Unable to load shared servers for Plex user %s: %s",
+                getattr(user, "username", None),
+                exc,
+            )
+            return False
+        for server in shared_servers or []:
+            if isinstance(server, dict):
+                server_machine_id = (
+                    server.get("machineIdentifier") or server.get("clientIdentifier")
+                )
+            else:
+                server_machine_id = (
+                    getattr(server, "machineIdentifier", None)
+                    or getattr(server, "clientIdentifier", None)
+                )
+            if server_machine_id == machine_id:
+                return True
+        return False
+
+    _append_recipient(account)
+    for plex_user in account.users():
+        if _has_share(plex_user):
+            _append_recipient(plex_user)
+
+    identities: Dict[str, Set[str]] = {}
+    for user in snapshot.users:
+        user_id = user.get("id")
+        if not user_id:
+            continue
+        names = identities.setdefault(str(user_id), set())
+        for field in ("username", "displayName"):
+            normalized = _normalize_account_name(user.get(field))
+            if normalized:
+                names.add(normalized)
+    for identity_id, history_entries in snapshot.history_by_user.items():
+        names = identities.setdefault(identity_id, set())
+        for item in history_entries:
+            history_user = item.get("user") or {}
+            normalized = _normalize_account_name(history_user.get("username"))
+            if normalized:
+                names.add(normalized)
+
+    matched: List[Dict[str, Any]] = []
+    matched_ids: Set[str] = set()
+    for recipient in recipients:
+        email = recipient.get("email")
+        recipient_names = {
+            value
+            for value in (
+                _normalize_account_name(recipient.get("username")),
+                _normalize_account_name(email),
+                _normalize_account_name(str(email or "").split("@", 1)[0]),
+            )
+            if value
+        }
+        user_id = next(
+            (
+                identity_id
+                for identity_id, identity_names in identities.items()
+                if identity_names & recipient_names
+            ),
+            None,
+        )
+        if not user_id:
+            current_app.logger.warning(
+                "No Tracearr identity matched Plex recipient %s.",
+                redact_email(email),
+            )
+            continue
+        if user_id in matched_ids:
+            continue
+        matched_ids.add(user_id)
+        matched.append(
+            {
+                "user_id": user_id,
+                "username": recipient.get("username"),
+                "email": email,
+            }
+        )
+    return matched
+
+
+def _get_users(
+    s: Settings,
+    machine_id: Optional[str] = None,
+    *,
+    tracearr_snapshot: Optional[TracearrHistorySnapshot] = None,
+) -> List[Dict[str, Any]]:
+    if _watch_history_source(s) == "tracearr":
+        try:
+            snapshot = tracearr_snapshot or _load_tracearr_snapshot(s)
+            return _get_tracearr_users(s, machine_id, snapshot) if snapshot else []
+        except Exception as exc:
+            current_app.logger.error("Error fetching users from Tracearr: %s", exc)
+            return []
+
     if s.tautulli_url and s.tautulli_api_key:
         try:
             plex = PlexServer(s.plex_url, s.plex_token)
@@ -2296,7 +2617,27 @@ def _get_users(s: Settings, machine_id: Optional[str] = None) -> List[Dict[str, 
     return []
 
 
-def _user_has_history(s: Settings, user_id: int, rating_key: Any) -> bool:
+def _user_has_history(
+    s: Settings,
+    user_id: Any,
+    rating_key: Any,
+    *,
+    show_title: Optional[str] = None,
+    show_year: Optional[int] = None,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    tracearr_snapshot: Optional[TracearrHistorySnapshot] = None,
+) -> bool:
+    if _watch_history_source(s) == "tracearr":
+        snapshot = tracearr_snapshot or _load_tracearr_snapshot(s)
+        if snapshot is None:
+            return False
+        return any(
+            _tracearr_show_matches(item, show_title, show_year)
+            and item.get("seasonNumber") == season
+            and item.get("episodeNumber") == episode
+            for item in snapshot.entries_for(user_id)
+        )
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
         resp = requests.get(
@@ -2474,12 +2815,37 @@ def _user_is_subscribed_for_show(
 
 def _user_has_watched_newer_episode(
     s: Settings,
-    user_id: int,
+    user_id: Any,
     grandparent_rating_key: Any,
     current_season: int,
     current_episode: int,
+    *,
+    show_title: Optional[str] = None,
+    show_year: Optional[int] = None,
+    tracearr_snapshot: Optional[TracearrHistorySnapshot] = None,
 ) -> bool:
     """Check if a user has watched an episode of a show newer than the current one."""
+    if _watch_history_source(s) == "tracearr":
+        snapshot = tracearr_snapshot or _load_tracearr_snapshot(s)
+        if snapshot is None:
+            return False
+        for item in snapshot.entries_for(user_id):
+            if not item.get("watched") or not _tracearr_show_matches(
+                item,
+                show_title,
+                show_year,
+            ):
+                continue
+            history_season = item.get("seasonNumber")
+            history_episode = item.get("episodeNumber")
+            if not isinstance(history_season, int) or not isinstance(history_episode, int):
+                continue
+            if history_season > current_season:
+                return True
+            if history_season == current_season and history_episode > current_episode:
+                return True
+        return False
+
     try:
         base = f"{s.tautulli_url.rstrip('/')}/api/v2"
         page_length = TAUTULLI_MAX_PAGE_LENGTH
@@ -2535,9 +2901,27 @@ def _user_has_watched_newer_episode(
 
 def _user_has_watched_show(
     s: Settings,
-    user_id: int,
+    user_id: Any,
     grandparent_rating_key: Any,
+    *,
+    show_title: Optional[str] = None,
+    show_year: Optional[int] = None,
+    tracearr_snapshot: Optional[TracearrHistorySnapshot] = None,
 ) -> Tuple[bool, str]:
+    if _watch_history_source(s) == "tracearr":
+        snapshot = tracearr_snapshot or _load_tracearr_snapshot(s)
+        if snapshot is None:
+            return False, "error"
+        entries = snapshot.entries_for(user_id)
+        matching = [
+            item
+            for item in entries
+            if _tracearr_show_matches(item, show_title, show_year)
+        ]
+        if any(item.get("watched") is True for item in matching):
+            return True, "available"
+        return (False, "available") if matching else (False, "empty")
+
     def _coerce_percent(value: Any) -> Optional[float]:
         if value is None:
             return None

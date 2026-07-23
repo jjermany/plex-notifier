@@ -183,6 +183,26 @@ function initSettingsPage() {
     });
   }
 
+  const toggleTracearrKeyBtn = document.getElementById('toggleTracearrKey');
+  if (toggleTracearrKeyBtn) {
+    toggleTracearrKeyBtn.addEventListener('click', () => {
+      togglePasswordVisibility('tracearr_api_key', 'iconTracearrKey');
+    });
+  }
+
+  const historySource = document.getElementById('watch_history_source');
+  const tautulliSettings = document.getElementById('tautulliSettings');
+  const tracearrSettings = document.getElementById('tracearrSettings');
+  const updateHistorySourceFields = () => {
+    const tracearrSelected = historySource && historySource.value === 'tracearr';
+    if (tautulliSettings) tautulliSettings.classList.toggle('d-none', tracearrSelected);
+    if (tracearrSettings) tracearrSettings.classList.toggle('d-none', !tracearrSelected);
+  };
+  if (historySource) {
+    historySource.addEventListener('change', updateHistorySourceFields);
+    updateHistorySourceFields();
+  }
+
   // Settings form submission
   const settingsForm = document.querySelector('form[action*="settings"]');
   if (settingsForm) {
@@ -203,6 +223,13 @@ function initSettingsPage() {
       const tautulliUrl = document.getElementById('tautulli_url');
       if (tautulliUrl && tautulliUrl.value && !isValidUrl(tautulliUrl.value)) {
         showFieldError(tautulliUrl, 'Please enter a valid URL (e.g., http://localhost:8181)');
+        isValid = false;
+      }
+
+      const tracearrUrl = document.getElementById('tracearr_url');
+      if (historySource && historySource.value === 'tracearr' &&
+          tracearrUrl && tracearrUrl.value && !isValidUrl(tracearrUrl.value)) {
+        showFieldError(tracearrUrl, 'Please enter a valid URL (e.g. http://localhost:3000)');
         isValid = false;
       }
 

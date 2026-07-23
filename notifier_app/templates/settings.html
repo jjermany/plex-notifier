@@ -81,10 +81,10 @@
     <form method="post" action="{{ url_for('settings') }}" novalidate>
       {{ form.hidden_tag() }}
 
-      <!-- Plex & Tautulli Card -->
+      <!-- Plex & Watch History Card -->
       <div class="card mb-4">
         <div class="card-header">
-          <i class="bi bi-server"></i> Plex &amp; Tautulli Configuration
+          <i class="bi bi-server"></i> Plex &amp; Watch History Configuration
         </div>
         <div class="card-body">
           <!-- Plex URL -->
@@ -122,6 +122,17 @@
             {% endif %}
           </div>
 
+          <!-- Watch History Source -->
+          <div class="mb-3">
+            {{ form.watch_history_source.label(class="form-label text-white") }}
+            {{ form.watch_history_source(class="form-select", id="watch_history_source") }}
+            <div class="form-text">
+              Tracearr combines Plex, Jellyfin, and Emby watch activity. Plex remains the source
+              for recipient email addresses.
+            </div>
+          </div>
+
+          <div id="tautulliSettings">
           <!-- Tautulli URL -->
           <div class="mb-3">
             {{ form.tautulli_url.label(class="form-label text-white") }}
@@ -155,6 +166,48 @@
                 <i class="bi bi-exclamation-circle"></i> {{ form.tautulli_api_key.errors[0] }}
               </div>
             {% endif %}
+          </div>
+          </div>
+
+          <div id="tracearrSettings">
+          <!-- Tracearr URL -->
+          <div class="mb-3">
+            {{ form.tracearr_url.label(class="form-label text-white") }}
+            <div class="input-group">
+              <span class="input-group-text bg-dark border-secondary">
+                <i class="bi bi-link-45deg"></i>
+              </span>
+              {{ form.tracearr_url(class="form-control", placeholder="http://localhost:3000", id="tracearr_url") }}
+            </div>
+            {% if form.tracearr_url.errors %}
+              <div class="text-danger small mt-1">
+                <i class="bi bi-exclamation-circle"></i> {{ form.tracearr_url.errors[0] }}
+              </div>
+            {% endif %}
+          </div>
+
+          <!-- Tracearr API Key -->
+          <div class="mb-3">
+            {{ form.tracearr_api_key.label(class="form-label text-white") }}
+            <div class="input-group">
+              <span class="input-group-text bg-dark border-secondary">
+                <i class="bi bi-key-fill"></i>
+              </span>
+              {{ form.tracearr_api_key(class="form-control", type="password", id="tracearr_api_key", placeholder="trr_pub_...") }}
+              <button class="btn btn-outline-secondary" type="button" id="toggleTracearrKey" title="Show/Hide API Key">
+                <i class="bi bi-eye" id="iconTracearrKey"></i>
+              </button>
+            </div>
+            {% if form.tracearr_api_key.errors %}
+              <div class="text-danger small mt-1">
+                <i class="bi bi-exclamation-circle"></i> {{ form.tracearr_api_key.errors[0] }}
+              </div>
+            {% endif %}
+            <div class="form-text">
+              Generate a public API key in Tracearr Settings. Public keys begin with
+              <code>trr_pub_</code>.
+            </div>
+          </div>
           </div>
         </div>
       </div>
