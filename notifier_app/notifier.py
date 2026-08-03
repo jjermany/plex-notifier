@@ -1881,22 +1881,17 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
 
                 rating_key = str(ep.ratingKey) if ep.ratingKey is not None else None
 
-                # Get Plex metadata timestamps for manual run filtering
+                # Plex updates ``updatedAt`` when an existing file is upgraded or
+                # its metadata changes.  It must not be used to decide that an
+                # episode is new: only ``addedAt`` represents the library add.
                 added_at = _coerce_plex_timestamp(getattr(ep, "addedAt", None))
-                updated_at = _coerce_plex_timestamp(getattr(ep, "updatedAt", None))
-                plex_added_dt = min(
-                    [dt for dt in (added_at, updated_at) if dt],
-                    default=None,
-                )
 
                 first_seen_at = None
+                newly_discovered = False
                 if rating_key:
                     first_seen_at = existing_first_seen.get(rating_key)
                     if not first_seen_at:
-                        # Use current time when the notification system first discovers
-                        # an episode, not Plex's addedAt/updatedAt metadata. This ensures
-                        # episodes are considered "new" when first detected by our system,
-                        # regardless of when they were originally added to Plex.
+                        newly_discovered = True
                         first_seen_at = now_dt
                         new_first_seen_rows.append(
                             EpisodeFirstSeen(
@@ -1905,11 +1900,13 @@ def check_new_episodes(app, override_interval_minutes: int = None) -> None:
                             )
                         )
 
-                # For manual runs, filter by Plex's addedAt/updatedAt metadata (when
-                # the episode was actually added to Plex). For scheduled runs, filter
-                # by first_seen_at (when our system first discovered the episode).
-                if override_interval_minutes is not None:
-                    filter_dt = plex_added_dt
+                # A newly discovered rating key can represent an existing episode
+                # whose media was upgraded.  Gate it on Plex's original addedAt so
+                # a new key (or a rebuilt first-seen ledger) cannot turn an upgrade
+                # into a notification.  Previously tracked episodes retain the
+                # first-seen gate used by scheduled polling.
+                if override_interval_minutes is not None or newly_discovered:
+                    filter_dt = added_at
                     filter_label = "plex_added"
                 else:
                     filter_dt = first_seen_at
